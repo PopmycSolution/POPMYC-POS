@@ -6,6 +6,9 @@
 # Cloud (Render) note:
 #   DATABASE_URL parsing uses Python's stdlib urllib.parse — no extra package.
 #   SSL connections to Supabase are handled by psycopg2-binary natively.
+#   Gunicorn is the WSGI server for cloud/Render deployments.
+#   The desktop application continues to use Waitress — Gunicorn is not
+#   invoked by the desktop launcher and is ignored on Windows installs.
 
 Django==5.2.17
 djangorestframework>=3.14
@@ -21,6 +24,12 @@ django-jsonfield-backport>=1.0
 requests>=2.31.0
 waitress>=3.0.0
 whitenoise>=6.7.0
+
+# ── WSGI server — cloud / Render deployment ───────────────────────────────────
+# Start command on Render:
+#   gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+# The desktop application uses Waitress (above) and never invokes Gunicorn.
+gunicorn>=21.2.0
 
 # Celery + Redis — kept for future scheduled tasks. In desktop mode these run
 # in CELERY_TASK_ALWAYS_EAGER=True mode so Redis is not required at runtime.
