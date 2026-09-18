@@ -381,3 +381,268 @@ class TrialCodeAdmin(admin.ModelAdmin):
         if obj and obj.status == TrialCode.TrialStatus.USED:
             return False
         return super().has_delete_permission(request, obj)
+
+    # ── TEMPORARY: database diagnostic custom admin view ──────────────────────
+    # Registered at:  /admin/licensing/trialcode/database-diagnostic/
+    # Read-only.  Remove this method and the import block below once the
+    # TrialCode lookup issue is diagnosed.
+
+    def get_urls(self):
+        from django.urls import path as url_path
+        urls = super().get_urls()
+        custom = [
+            url_path(
+                "database-diagnostic/",
+                self.admin_site.admin_view(self._diagnostic_view),
+                name="licensing_trialcode_database_diagnostic",
+            ),
+        ]
+        return custom + urls  # prepend so our URL is checked first
+
+    def _diagnostic_view(self, request):
+        """
+        Read-only diagnostic page for the TrialCode database connection.
+
+        Displays the same information as the API endpoint at
+        GET /api/v1/cloud/diagnostics/trial-codes/ but as an HTML Admin page,
+        so we can compare Django Admin's DB connection with the live API's.
+
+        Security:
+          - Restricted to staff/superusers by admin_site.admin_view() wrapper.
+          - Never displays DATABASE_URL, DB_PASSWORD, SECRET_KEY, or tokens.
+          - All sensitive config values are redacted.
+          - Read-only: no data is created, modified, or deleted.
+        """
+        import os
+        from django.conf import settings as dj_settings
+        from django.db import connection
+        from django.http import HttpResponse
+
+        def _redact(value):
+            s = str(value) if value else ""
+            if not s:
+                return "<empty>"
+            if len(s) <= 6:
+                return "***"
+            return f"{s[:3]}{'*' * (len(s) - 6)}{s[-3:]}"
+
+        # ── Collect diagnostic data ────────────────────────────────────────────
+
+        # Settings context
+        settings_module = os.environ.get("DJANGO_SETTINGS_MODULE", "<not set>")
+        db_cfg  = dj_settings.DATABASES.get("default", {})
+        engine  = db_cfg.get("ENGINE", "")
+        db_name = str(db_cfg.get("NAME", ""))
+        db_host = str(db_cfg.get("HOST", ""))
+        db_port = str(db_cfg.get("PORT", ""))
+        db_user = str(db_cfg.get("USER", ""))
+        db_url_set = bool(os.environ.get("DATABASE_URL", ""))
+        host_lower = db_host.lower()
+        is_local   = "localhost" in host_lower or "127.0.0" in host_lower
+
+        # PostgreSQL runtime values (actual session — not from settings)
+        pg_db = pg_user = pg_version = pg_error = None
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SELECT current_database(), current_user, version()")
+                row = cur.fetchone()
+                pg_db, pg_user, pg_version = row
+        except Exception as exc:
+            pg_error = str(exc)
+
+        # TrialCode counts
+        total_count = pending_count = used_count = revoked_count = 0
+        count_error = None
+        try:
+            total_count   = TrialCode.objects.count()
+            pending_count = TrialCode.objects.filter(status=TrialCode.TrialStatus.PENDING).count()
+            used_count    = TrialCode.objects.filter(status=TrialCode.TrialStatus.USED).count()
+            revoked_count = TrialCode.objects.filter(status=TrialCode.TrialStatus.REVOKED).count()
+        except Exception as exc:
+            count_error = str(exc)
+
+        # Latest 10 codes
+        latest_codes = []
+        latest_error = None
+        try:
+            for tc in TrialCode.objects.order_by("-created_at")[:10]:
+                latest_codes.append(
+                    {
+                        "code":       tc.code,
+                        "repr_code":  repr(tc.code),
+                        "len":        len(tc.code),
+                        "status":     tc.status,
+                        "created_at": str(tc.created_at),
+                    }
+                )
+        except Exception as exc:
+            latest_error = str(exc)
+
+        # ── Render HTML page ───────────────────────────────────────────────────
+        # Plain HTML — no template dependency so the view works even if
+        # templates are misconfigured.
+
+        def row(label, value, warn=False, mono=False):
+            style = "color:#856404;background:#fff3cd;padding:2px 6px;border-radius:3px;" if warn else ""
+            val_fmt = f"<code>{value}</code>" if mono else value
+            return (
+                f"<tr>"
+                f"<td style='padding:6px 12px;font-weight:600;white-space:nowrap'>{label}</td>"
+                f"<td style='padding:6px 12px;{style}'>{val_fmt}</td>"
+                f"</tr>"
+            )
+
+        def section(title):
+            return (
+                f"<tr><td colspan='2' style='padding:12px 12px 4px;"
+                f"font-weight:700;font-size:13px;background:#f8f9fa;"
+                f"border-top:2px solid #dee2e6;text-transform:uppercase;"
+                f"letter-spacing:.04em;color:#495057'>{title}</td></tr>"
+            )
+
+        rows = []
+        rows.append(section("Django Runtime"))
+        rows.append(row("Settings module", settings_module, mono=True))
+        rows.append(row("DEBUG", str(dj_settings.DEBUG)))
+        rows.append(row(
+            "CLOUD_ENABLED",
+            str(getattr(dj_settings, "CLOUD_ENABLED", "<not set>")),
+        ))
+
+        rows.append(section("Database Config (redacted)"))
+        rows.append(row("ENGINE",           engine,           mono=True))
+        rows.append(row("NAME (redacted)",  _redact(db_name), mono=True))
+        rows.append(row(
+            "HOST (redacted)",
+            _redact(db_host),
+            warn=is_local,
+            mono=True,
+        ))
+        if is_local:
+            rows.append(row(
+                "⚠ WARNING",
+                "HOST is localhost — Admin may be using the desktop DB, not Supabase",
+                warn=True,
+            ))
+        rows.append(row("PORT",             db_port,          mono=True))
+        rows.append(row("USER (redacted)",  _redact(db_user), mono=True))
+        rows.append(row("DATABASE_URL set", str(db_url_set)))
+
+        rows.append(section("PostgreSQL Runtime (actual session values)"))
+        if pg_error:
+            rows.append(row("Connection error", pg_error, warn=True))
+        else:
+            rows.append(row("current_database()", pg_db,      mono=True))
+            rows.append(row("current_user",       pg_user,    mono=True))
+            rows.append(row("server_version",     (pg_version or "")[:80], mono=True))
+
+        rows.append(section("TrialCode Counts"))
+        if count_error:
+            rows.append(row("Error", count_error, warn=True))
+        else:
+            rows.append(row("Total",   str(total_count)))
+            rows.append(row("PENDING", str(pending_count),
+                            warn=(pending_count == 0 and total_count > 0)))
+            rows.append(row("USED",    str(used_count)))
+            rows.append(row("REVOKED", str(revoked_count)))
+
+        # Latest codes table
+        if latest_error:
+            codes_html = f"<p style='color:red'>Error: {latest_error}</p>"
+        elif not latest_codes:
+            codes_html = "<p style='color:#6c757d'><em>No TrialCode records in this database.</em></p>"
+        else:
+            code_rows = "".join(
+                f"<tr>"
+                f"<td style='padding:5px 10px;font-family:monospace'>{tc['code']}</td>"
+                f"<td style='padding:5px 10px;font-family:monospace;font-size:11px'>{tc['repr_code']}</td>"
+                f"<td style='padding:5px 10px;text-align:center'>{tc['len']}</td>"
+                f"<td style='padding:5px 10px'>{tc['status']}</td>"
+                f"<td style='padding:5px 10px;font-size:11px;color:#6c757d'>{tc['created_at']}</td>"
+                f"</tr>"
+                for tc in latest_codes
+            )
+            codes_html = (
+                "<table style='border-collapse:collapse;width:100%;font-size:13px'>"
+                "<thead><tr style='background:#f8f9fa'>"
+                "<th style='padding:6px 10px;text-align:left'>Code</th>"
+                "<th style='padding:6px 10px;text-align:left'>repr(code) — hidden chars visible here</th>"
+                "<th style='padding:6px 10px;text-align:center'>Len</th>"
+                "<th style='padding:6px 10px;text-align:left'>Status</th>"
+                "<th style='padding:6px 10px;text-align:left'>Created</th>"
+                "</tr></thead>"
+                f"<tbody>{code_rows}</tbody>"
+                "</table>"
+            )
+
+        table_html = (
+            "<table style='border-collapse:collapse;width:100%;font-size:13px;"
+            "border:1px solid #dee2e6'>"
+            + "".join(rows)
+            + "</table>"
+        )
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TrialCode DB Diagnostic — POPMYC Admin</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+             margin: 0; padding: 0; background: #f8f9fa; color: #212529; }}
+    .container {{ max-width: 960px; margin: 32px auto; padding: 0 24px 64px; }}
+    h1 {{ font-size: 22px; margin-bottom: 4px; color: #212529; }}
+    .subtitle {{ font-size: 13px; color: #6c757d; margin-bottom: 24px; }}
+    .banner {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px;
+               padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #856404; }}
+    .card {{ background: #fff; border: 1px solid #dee2e6; border-radius: 6px;
+             overflow: hidden; margin-bottom: 24px; }}
+    .card-title {{ font-size: 14px; font-weight: 700; padding: 12px 16px;
+                   background: #e9ecef; border-bottom: 1px solid #dee2e6; }}
+    .card-body {{ padding: 16px; }}
+    a {{ color: #0d6efd; }}
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🔍 TrialCode Database Diagnostic</h1>
+  <p class="subtitle">
+    TEMPORARY READ-ONLY PAGE — Django Admin view for diagnosing the
+    TrialCode database connection. No data is modified.
+    Compare with the API endpoint at
+    <a href="/api/v1/cloud/diagnostics/trial-codes/" target="_blank">
+      /api/v1/cloud/diagnostics/trial-codes/
+    </a>.
+  </p>
+
+  <div class="banner">
+    ⚠ This page is restricted to staff/superusers.
+    Never share screenshots containing DATABASE_URL, passwords, or SECRET_KEY.
+    This page shows only redacted values.
+  </div>
+
+  <div class="card">
+    <div class="card-title">Database &amp; Runtime Context</div>
+    <div class="card-body">{table_html}</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">
+      Latest 10 TrialCodes
+      <span style="font-weight:400;font-size:12px;margin-left:8px;color:#6c757d">
+        repr() column reveals hidden characters (non-ASCII, invisible Unicode, unexpected spaces)
+      </span>
+    </div>
+    <div class="card-body">{codes_html}</div>
+  </div>
+
+  <p style="font-size:12px;color:#6c757d">
+    &larr; <a href="/admin/licensing/trialcode/">Back to Trial Codes</a>
+    &nbsp;|&nbsp;
+    <a href="/admin/">Admin Home</a>
+  </p>
+</div>
+</body>
+</html>"""
+
+        return HttpResponse(html, content_type="text/html")
