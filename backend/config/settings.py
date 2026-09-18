@@ -26,6 +26,11 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
+# ── CSRF trusted origins (required for Render / any non-localhost deployment) ─
+# Example: CSRF_TRUSTED_ORIGINS=https://popmyc.onrender.com,https://app.popmyc.com
+_csrf_origins_env = os.getenv("CSRF_TRUSTED_ORIGINS", "")
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins_env.split(",") if o.strip()]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -103,16 +108,51 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", "popmyc_pos"),
-        "USER": os.getenv("DB_USER", "postgres"),
-        "PASSWORD": os.getenv("DB_PASSWORD", "changeme"),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+# ── Database ──────────────────────────────────────────────────────────────────
+# Priority:
+#   1. DATABASE_URL  — set on Render / Supabase cloud deployments.
+#   2. DB_* vars     — used by the local Windows desktop installation.
+#
+# The local DB_* path is NEVER modified by the DATABASE_URL logic, so the
+# existing desktop / offline workflow is completely unaffected.
+
+_DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if _DATABASE_URL:
+    # Parse the PostgreSQL URL using Python's stdlib urllib.parse.
+    # No external library is required.
+    from urllib.parse import urlparse as _urlparse, unquote as _unquote
+
+    _u = _urlparse(_DATABASE_URL)
+    DATABASES = {
+        "default": {
+            "ENGINE":   "django.db.backends.postgresql",
+            "NAME":     _unquote(_u.path.lstrip("/")),
+            "USER":     _unquote(_u.username or ""),
+            "PASSWORD": _unquote(_u.password or ""),
+            "HOST":     _u.hostname or "localhost",
+            "PORT":     str(_u.port or 5432),
+            # Supabase / Render PostgreSQL requires SSL.
+            # DB_SSLMODE can override this (e.g. "disable" for local testing
+            # with a DATABASE_URL).  The local DB_* path never sets OPTIONS
+            # so the existing Windows desktop connection is untouched.
+            "OPTIONS": {
+                "sslmode": os.getenv("DB_SSLMODE", "require"),
+            },
+        }
     }
-}
+else:
+    # ── Local desktop path — unchanged from original configuration ────────────
+    DATABASES = {
+        "default": {
+            "ENGINE":   "django.db.backends.postgresql",
+            "NAME":     os.getenv("DB_NAME", "popmyc_pos"),
+            "USER":     os.getenv("DB_USER", "postgres"),
+            "PASSWORD": os.getenv("DB_PASSWORD", "changeme"),
+            "HOST":     os.getenv("DB_HOST", "localhost"),
+            "PORT":     os.getenv("DB_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

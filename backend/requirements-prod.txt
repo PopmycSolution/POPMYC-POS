@@ -2,6 +2,10 @@
 # This file is used to install packages into the bundled Python runtime.
 # It intentionally EXCLUDES development/test tools (pytest, faker, etc.)
 # and API documentation tools (drf-spectacular) that are not needed at runtime.
+#
+# Cloud (Render) note:
+#   DATABASE_URL parsing uses Python's stdlib urllib.parse — no extra package.
+#   SSL connections to Supabase are handled by psycopg2-binary natively.
 
 Django==5.2.17
 djangorestframework>=3.14
