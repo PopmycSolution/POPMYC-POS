@@ -330,9 +330,9 @@ class TestPaidActivationRegression(TestCase):
             "admin": {
                 "first_name": "Paid",
                 "last_name":  "User",
-                "username":   "paid_reg_user",
-                "email":      "paid_reg@test.com",
-                "password":   "PaidReg@123",
+                "username":   "paidreg_v1",
+                "email":      "paidreg_v1@test.com",
+                "password":   "Xk7#mQ29vZ!",
             },
             "license": {"activation_code": self.lic.activation_code},
         }
