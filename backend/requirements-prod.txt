@@ -1,0 +1,24 @@
+# POPMYC POS — Production runtime dependencies only.
+# This file is used to install packages into the bundled Python runtime.
+# It intentionally EXCLUDES development/test tools (pytest, faker, etc.)
+# and API documentation tools (drf-spectacular) that are not needed at runtime.
+
+Django==5.2.17
+djangorestframework>=3.14
+django-cors-headers>=4.3
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+djangorestframework-simplejwt>=5.3
+django-filter>=23.5
+django-guardian>=2.4
+drf-spectacular>=0.27
+Pillow>=10.0
+django-jsonfield-backport>=1.0
+requests>=2.31.0
+waitress>=3.0.0
+whitenoise>=6.7.0
+
+# Celery + Redis — kept for future scheduled tasks. In desktop mode these run
+# in CELERY_TASK_ALWAYS_EAGER=True mode so Redis is not required at runtime.
+celery>=5.3
+redis>=5.0

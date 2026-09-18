@@ -1,0 +1,41 @@
+from django.urls import path
+
+from .views import (
+    SalesReportView,
+    ProfitReportView,
+    RevenueReportView,
+    ExpenseReportView,
+    InventoryReportView,
+    StockValueReportView,
+    CustomerReportView,
+    CustomerDebtReportView,
+    SupplierReportView,
+    PurchaseReportView,
+    CashierPerformanceReportView,
+    BranchPerformanceReportView,
+    TaxReportView,
+    PaymentReportView,
+    ShiftReportView,
+    FinancialReportsView,
+    ExportReportView,
+)
+
+urlpatterns = [
+    path("sales/", SalesReportView.as_view(), name="sales-report"),
+    path("profit/", ProfitReportView.as_view(), name="profit-report"),
+    path("revenue/", RevenueReportView.as_view(), name="revenue-report"),
+    path("expenses/", ExpenseReportView.as_view(), name="expense-report"),
+    path("inventory/", InventoryReportView.as_view(), name="inventory-report"),
+    path("stock-value/", StockValueReportView.as_view(), name="stock-value-report"),
+    path("customers/", CustomerReportView.as_view(), name="customer-report"),
+    path("customer-debt/", CustomerDebtReportView.as_view(), name="customer-debt-report"),
+    path("suppliers/", SupplierReportView.as_view(), name="supplier-report"),
+    path("purchases/", PurchaseReportView.as_view(), name="purchase-report"),
+    path("cashier-performance/", CashierPerformanceReportView.as_view(), name="cashier-performance-report"),
+    path("branch-performance/", BranchPerformanceReportView.as_view(), name="branch-performance-report"),
+    path("tax/", TaxReportView.as_view(), name="tax-report"),
+    path("payments/", PaymentReportView.as_view(), name="payment-report"),
+    path("shift/", ShiftReportView.as_view(), name="shift-report"),
+    path("financial/", FinancialReportsView.as_view(), name="financial-reports"),
+    path("<str:report_name>/export/", ExportReportView.as_view(), name="export-report"),
+]

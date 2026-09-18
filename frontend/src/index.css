@@ -1,0 +1,453 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   CSS CUSTOM PROPERTIES — LIGHT & DARK DESIGN TOKENS
+   All themed colours/shadows reference these vars so any
+   component that uses them gets free dark-mode support.
+   ============================================================ */
+@layer base {
+  :root {
+    /* ── Surfaces ── */
+    --bg-page:     #f8fafc;
+    --bg-card:     #ffffff;
+    --bg-sidebar:  #0f172a;
+    --bg-header:   rgba(255,255,255,0.82);
+
+    /* ── Borders ── */
+    --border-base: #e2e8f0;
+    --border-card: #f1f5f9;
+    --border-side: rgba(255,255,255,0.07);
+
+    /* ── Text ── */
+    --text-primary:   #0f172a;
+    --text-secondary: #475569;
+    --text-muted:     #94a3b8;
+    --text-inverted:  #ffffff;
+
+    /* ── Accent / mint ── */
+    --mint:        #00FFAA;
+    --mint-dim:    #00d48c;
+    --mint-alpha:  rgba(0,255,170,0.14);
+    --mint-glow:   rgba(0,255,170,0.28);
+
+    /* ── Shadows ── */
+    --shadow-card:  0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-panel: 0 4px 20px rgba(0,0,0,.08);
+    --shadow-modal: 0 20px 60px -10px rgba(0,0,0,.18);
+  }
+
+  /* Dark mode overrides */
+  .dark {
+    --bg-page:    #0d1424;
+    --bg-card:    #1a2540;
+    --bg-sidebar: #080f1e;
+    --bg-header:  rgba(13,20,36,0.88);
+
+    --border-base: rgba(255,255,255,0.08);
+    --border-card: rgba(255,255,255,0.06);
+    --border-side: rgba(255,255,255,0.06);
+
+    --text-primary:   #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted:     #475569;
+    --text-inverted:  #0f172a;
+
+    --shadow-card:  0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+    --shadow-panel: 0 4px 20px rgba(0,0,0,.35);
+    --shadow-modal: 0 20px 60px -10px rgba(0,0,0,.6);
+  }
+
+  /* ── Global resets ── */
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html, body, #root {
+    @apply max-w-full;
+    overflow-x: hidden;
+  }
+
+  @media (max-width: 419px) {
+    html, body, #root { min-width: 0; }
+  }
+
+  body {
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    @apply min-h-screen m-0 transition-colors duration-200;
+  }
+
+  #root {
+    @apply min-h-screen flex flex-col;
+  }
+
+  /* ── Scrollbars ── */
+  ::-webkit-scrollbar       { @apply w-1.5 h-1.5; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: rgba(148,163,184,.35);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148,163,184,.55);
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.12);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.2);
+  }
+
+  /* ── Print ── */
+  @media print {
+    * { visibility: hidden; }
+    body {
+      margin: 0 !important; padding: 0 !important;
+      background: white !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    #root > * { visibility: hidden !important; display: none !important; }
+  }
+}
+
+/* ============================================================
+   COMPONENT UTILITIES
+   ============================================================ */
+@layer components {
+
+  /* ── Layout ── */
+  .app-container {
+    @apply w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  /* ── Themed card ── */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    box-shadow: var(--shadow-card);
+    @apply rounded-2xl;
+  }
+
+  .card-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border-base);
+    box-shadow: var(--shadow-panel);
+    @apply rounded-2xl;
+  }
+
+  /* ── Buttons ── */
+  .btn-base {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold
+           transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-mint {
+    @apply btn-base px-4 py-2.5 text-[#0f172a];
+    background: var(--mint);
+    box-shadow: 0 0 0 0 var(--mint-glow);
+  }
+  .btn-mint:hover {
+    background: var(--mint-dim);
+    box-shadow: 0 0 16px 0 var(--mint-glow);
+  }
+
+  .btn-ghost {
+    @apply btn-base px-3 py-2 text-[--text-secondary] hover:text-[--text-primary];
+    background: transparent;
+  }
+  .btn-ghost:hover {
+    background: var(--mint-alpha);
+  }
+
+  /* ── Inputs ── */
+  .input-base {
+    @apply block w-full rounded-xl border text-sm transition-all duration-200
+           placeholder:text-muted-400
+           focus:outline-none focus:ring-2 disabled:cursor-not-allowed;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border-color: var(--border-base);
+    padding: 0.625rem 0.875rem;
+  }
+  .input-base:focus {
+    border-color: var(--mint);
+    --tw-ring-color: var(--mint-alpha);
+    box-shadow: 0 0 0 3px var(--mint-alpha);
+  }
+
+  /* ── Sidebar nav item ── */
+  .nav-item {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium
+           transition-all duration-150 cursor-pointer select-none;
+  }
+  .nav-item-active {
+    color: var(--mint);
+    background: var(--mint-alpha);
+  }
+  .nav-item-inactive {
+    color: rgba(255,255,255,.5);
+  }
+  .nav-item-inactive:hover {
+    color: rgba(255,255,255,.85);
+    background: rgba(255,255,255,.06);
+  }
+
+  /* ── Badge ── */
+  .badge-mint {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold;
+    background: var(--mint-alpha);
+    color: var(--mint);
+    border: 1px solid var(--mint-glow);
+  }
+}
+
+/* ============================================================
+   UTILITY KEYFRAMES & ANIMATIONS
+   ============================================================ */
+@layer utilities {
+  .line-clamp-1 {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+
+  /* Themed text helpers */
+  .text-page-primary   { color: var(--text-primary); }
+  .text-page-secondary { color: var(--text-secondary); }
+  .text-page-muted     { color: var(--text-muted); }
+
+  /* Themed surface helpers */
+  .bg-surface   { background: var(--bg-card); }
+  .bg-page      { background: var(--bg-page); }
+  .border-theme { border-color: var(--border-base); }
+}
+
+/* ============================================================
+   DARK MODE — GLOBAL TAILWIND CLASS OVERRIDES
+   Maps hardcoded Tailwind colour classes to design tokens.
+   Applied when <html class="dark"> is set by the theme store.
+   This covers all pages without touching any component files.
+   ============================================================ */
+
+/* ── Surface / background overrides ─────────────────────────── */
+.dark .bg-white          { background-color: var(--bg-card)  !important; }
+.dark .bg-muted-50       { background-color: var(--bg-page)  !important; }
+.dark .bg-muted-100      { background-color: #1e2d45         !important; }
+.dark .bg-muted-200      { background-color: #253352         !important; }
+.dark .bg-slate-50       { background-color: var(--bg-page)  !important; }
+.dark .bg-slate-100      { background-color: #1e2d45         !important; }
+.dark .bg-gray-50        { background-color: var(--bg-page)  !important; }
+.dark .bg-gray-100       { background-color: #1e2d45         !important; }
+
+/* hover surfaces */
+.dark .hover\:bg-muted-50:hover   { background-color: rgba(255,255,255,.04) !important; }
+.dark .hover\:bg-muted-100:hover  { background-color: rgba(255,255,255,.07) !important; }
+.dark .hover\:bg-slate-50:hover   { background-color: rgba(255,255,255,.04) !important; }
+
+/* ── Text overrides ──────────────────────────────────────────── */
+.dark .text-\[\#1E293B\]    { color: var(--text-primary)   !important; }
+.dark .text-\[\#334155\]    { color: var(--text-secondary) !important; }
+.dark .text-\[\#0F172A\]    { color: var(--text-primary)   !important; }
+.dark .text-muted-900       { color: var(--text-primary)   !important; }
+.dark .text-muted-800       { color: var(--text-primary)   !important; }
+.dark .text-muted-700       { color: var(--text-secondary) !important; }
+.dark .text-muted-600       { color: var(--text-secondary) !important; }
+.dark .text-muted-500       { color: var(--text-muted)     !important; }
+.dark .text-muted-400       { color: #64748b               !important; }
+.dark .text-slate-900       { color: var(--text-primary)   !important; }
+.dark .text-slate-800       { color: var(--text-primary)   !important; }
+.dark .text-slate-700       { color: var(--text-secondary) !important; }
+.dark .text-slate-600       { color: var(--text-secondary) !important; }
+.dark .text-slate-500       { color: var(--text-muted)     !important; }
+.dark .text-slate-400       { color: #64748b               !important; }
+.dark .text-gray-700        { color: var(--text-secondary) !important; }
+.dark .text-gray-600        { color: var(--text-secondary) !important; }
+.dark .text-gray-500        { color: var(--text-muted)     !important; }
+
+/* ── Border overrides ────────────────────────────────────────── */
+.dark .border-muted-50      { border-color: rgba(255,255,255,.04) !important; }
+.dark .border-muted-100     { border-color: rgba(255,255,255,.06) !important; }
+.dark .border-muted-200     { border-color: rgba(255,255,255,.08) !important; }
+.dark .border-muted-300     { border-color: rgba(255,255,255,.12) !important; }
+.dark .border-slate-100     { border-color: rgba(255,255,255,.05) !important; }
+.dark .border-slate-200     { border-color: rgba(255,255,255,.08) !important; }
+.dark .border-gray-200      { border-color: rgba(255,255,255,.08) !important; }
+
+/* ── Shadow overrides ────────────────────────────────────────── */
+.dark .shadow-sm   { box-shadow: 0 1px 3px rgba(0,0,0,.4)              !important; }
+.dark .shadow      { box-shadow: 0 2px 8px rgba(0,0,0,.4)              !important; }
+.dark .shadow-md   { box-shadow: 0 4px 16px rgba(0,0,0,.45)            !important; }
+.dark .shadow-lg   { box-shadow: 0 8px 32px rgba(0,0,0,.5)             !important; }
+.dark .shadow-xl   { box-shadow: 0 16px 48px rgba(0,0,0,.55)           !important; }
+
+/* The hardcoded shadow pattern used by most page cards */
+.dark [style*="0_2px_8px_rgba(0,0,0,0.06)"],
+.dark [style*="0_1px_3px_rgba(0,0,0,0.06)"] {
+  box-shadow: 0 2px 12px rgba(0,0,0,.45) !important;
+}
+
+/* ── Input / form field overrides ────────────────────────────── */
+.dark input:not([type=range]),
+.dark textarea,
+.dark select {
+  background-color: #1e2d45         !important;
+  color:            var(--text-primary) !important;
+  border-color:     rgba(255,255,255,.12) !important;
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #4a5568 !important;
+}
+.dark input:focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: var(--mint)  !important;
+  box-shadow: 0 0 0 3px var(--mint-alpha) !important;
+  outline: none;
+}
+
+/* The specific inputClass pattern used across pages */
+.dark .bg-white.border.border-muted-200,
+.dark [class*="bg-white"][class*="border-muted-200"] {
+  background-color: #1e2d45 !important;
+  border-color: rgba(255,255,255,.12) !important;
+}
+
+/* ── Table overrides ─────────────────────────────────────────── */
+.dark table                { color: var(--text-primary) !important; }
+.dark thead tr             { background-color: #1a2540  !important; }
+.dark tbody tr             { background-color: var(--bg-card) !important; }
+.dark tbody tr:hover       { background-color: rgba(255,255,255,.04) !important; }
+.dark .hover\:bg-muted-50\/50:hover {
+  background-color: rgba(255,255,255,.03) !important;
+}
+
+/* ── Card / panel patterns used on all interior pages ────────── */
+/* rounded-2xl bg-white border ... shadow patterns */
+.dark .rounded-2xl.bg-white,
+.dark .rounded-xl.bg-white,
+.dark .rounded-lg.bg-white {
+  background-color: var(--bg-card) !important;
+}
+
+/* ── Dropdown / popover / modal overlays ─────────────────────── */
+.dark .bg-white.rounded-xl,
+.dark .bg-white.rounded-2xl {
+  background-color: var(--bg-card) !important;
+}
+
+/* ── Select dropdowns ────────────────────────────────────────── */
+.dark select option {
+  background-color: #1a2540 !important;
+  color: var(--text-primary) !important;
+}
+
+/* ── Specific page-card pattern: bg-white shadow-[0_2px...] ──── */
+.dark [class*="shadow-\[0_2px_8px"] {
+  background-color: var(--bg-card) !important;
+}
+
+/* ── Status & badge pill light backgrounds ───────────────────── */
+.dark .bg-emerald-50  { background-color: rgba(16,185,129,.15) !important; }
+.dark .bg-blue-50     { background-color: rgba(59,130,246,.15) !important; }
+.dark .bg-red-50      { background-color: rgba(239,68,68,.15)  !important; }
+.dark .bg-rose-50     { background-color: rgba(244,63,94,.15)  !important; }
+.dark .bg-amber-50    { background-color: rgba(245,158,11,.15) !important; }
+.dark .bg-yellow-50   { background-color: rgba(234,179,8,.15)  !important; }
+.dark .bg-purple-50   { background-color: rgba(168,85,247,.15) !important; }
+.dark .bg-violet-50   { background-color: rgba(139,92,246,.15) !important; }
+.dark .bg-orange-50   { background-color: rgba(249,115,22,.15) !important; }
+.dark .bg-teal-50     { background-color: rgba(20,184,166,.15) !important; }
+.dark .bg-cyan-50     { background-color: rgba(6,182,212,.15)  !important; }
+.dark .bg-indigo-50   { background-color: rgba(99,102,241,.15) !important; }
+.dark .bg-sky-50      { background-color: rgba(14,165,233,.15) !important; }
+.dark .bg-pink-50     { background-color: rgba(236,72,153,.15) !important; }
+.dark .bg-lime-50     { background-color: rgba(132,204,22,.15) !important; }
+.dark .bg-green-50    { background-color: rgba(34,197,94,.15)  !important; }
+
+/* ── Border colours for status pills in dark ─────────────────── */
+.dark .border-emerald-200 { border-color: rgba(16,185,129,.3)  !important; }
+.dark .border-blue-200    { border-color: rgba(59,130,246,.3)  !important; }
+.dark .border-red-200     { border-color: rgba(239,68,68,.3)   !important; }
+.dark .border-rose-200    { border-color: rgba(244,63,94,.3)   !important; }
+.dark .border-amber-200   { border-color: rgba(245,158,11,.3)  !important; }
+.dark .border-purple-200  { border-color: rgba(168,85,247,.3)  !important; }
+.dark .border-teal-200    { border-color: rgba(20,184,166,.3)  !important; }
+.dark .border-indigo-200  { border-color: rgba(99,102,241,.3)  !important; }
+
+/* ── Dividers ────────────────────────────────────────────────── */
+.dark .divide-y > * + *  { border-color: rgba(255,255,255,.06) !important; }
+.dark .divide-muted-50 > * + *,
+.dark .divide-muted-100 > * + * { border-color: rgba(255,255,255,.05) !important; }
+
+/* ── Ring / focus utilities ──────────────────────────────────── */
+.dark .ring-1 { --tw-ring-color: rgba(255,255,255,.10); }
+.dark .ring-2 { --tw-ring-color: rgba(255,255,255,.12); }
+
+/* ── Hardcoded hex colour text values used on pages ──────────── */
+.dark [class*="text-\[#1E293B\]"] { color: var(--text-primary)   !important; }
+.dark [class*="text-\[#334155\]"] { color: var(--text-secondary) !important; }
+.dark [class*="text-\[#475569\]"] { color: var(--text-secondary) !important; }
+.dark [class*="text-\[#64748b\]"] { color: var(--text-muted)     !important; }
+
+/* ── Hardcoded hex bg values used on pages ───────────────────── */
+.dark [class*="bg-\[#1E293B\]"],
+.dark [class*="bg-\[#0F172A\]"] {
+  background-color: var(--mint) !important;
+  color: #0a1628 !important;
+}
+
+/* ── Inline style bg-white panels (common card pattern) ─────── */
+.dark [style*="background: white"],
+.dark [style*="background-color: white"],
+.dark [style*="background:#fff"],
+.dark [style*="background: #fff"],
+.dark [style*="background-color:#fff"],
+.dark [style*="background: rgb(255, 255, 255)"] {
+  background-color: var(--bg-card) !important;
+}
+
+/* ── POS page specific ───────────────────────────────────────── */
+.dark .bg-\[\#F8FAFC\] { background-color: var(--bg-page) !important; }
+.dark .bg-\[\#f8fafc\] { background-color: var(--bg-page) !important; }
+
+/* ── Toggle / switch components ─────────────────────────────── */
+.dark .bg-\[\#1E293B\] {
+  background-color: var(--mint) !important;
+}
+
+/* ── Settings page specific hardcoded bg ────────────────────── */
+.dark .bg-\[\#1E293B\].text-white {
+  background-color: var(--mint) !important;
+  color: #0a1628 !important;
+}
+
+/* ── Active nav buttons (bg-[#1E293B]) should use mint ───────── */
+.dark button.bg-\[\#1E293B\],
+.dark a.bg-\[\#1E293B\] {
+  background-color: var(--mint) !important;
+  color: #0a1628 !important;
+}
+.dark button.hover\:bg-\[\#334155\]:hover,
+.dark a.hover\:bg-\[\#334155\]:hover {
+  background-color: var(--mint-dim) !important;
+}

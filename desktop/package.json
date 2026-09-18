@@ -1,0 +1,107 @@
+{
+  "name": "popmyc-pos-desktop",
+  "version": "1.0.0",
+  "description": "POPMYC POS Desktop Application",
+  "author": "POPMyC Solutions <popmycsolution@gmail.com>",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "npx electron-builder --win --x64",
+    "build:dir": "npx electron-builder --win --x64 --dir",
+    "pack": "npx electron-builder --dir",
+    "build:unpacked": "npx electron-builder --win --x64 --dir",
+    "build:installer": "node scripts/build-installer.js"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.0",
+    "electron-updater": "^6.3.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.popmyc.pos",
+    "productName": "POPMYC POS",
+    "copyright": "Copyright © 2025 POPMyC Solutions",
+    "directories": {
+      "output": "dist-installer",
+      "buildResources": "resources"
+    },
+  "files": [
+  "main.js",
+  "preload.js",
+  "service-manager.js",
+  "splash.html",
+  "db-setup.html",
+  "resources/**/*"
+],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!**/.venv/**",
+          "!**/.venv-prod/**",
+          "!**/venv/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/node_modules/**",
+          "!**/.pytest_cache/**",
+          "!**/pytest.ini",
+          "!**/pyproject.toml",
+          "!**/conftest.py",
+          "!**/*_test.py",
+          "!**/test_*.py",
+          "!**/tests/**",
+          "!**/audit_stage4/**",
+          "!**/.env",
+          "!**/.env.example"
+        ]
+      },
+      {
+        "from": "runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+   "win": {
+  "target": [
+    {
+      "target": "nsis",
+      "arch": [
+        "x64"
+      ]
+    }
+  ],
+  "icon": "resources/icon.ico",
+  "signtoolOptions": {
+    "publisherName": "POPMyC Solutions",
+    "signingHashAlgorithms": [
+      "sha256"
+    ]
+  }
+},
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "POPMYC POS",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://releases.popmycsolutions.com/popmyc-pos/",
+      "channel": "latest"
+    }
+  }
+}

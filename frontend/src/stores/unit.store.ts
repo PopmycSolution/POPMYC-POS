@@ -1,0 +1,94 @@
+import { create } from 'zustand';
+
+export interface UnitRecord {
+  id: string;
+  name: string;       // e.g. "Piece"
+  abbreviation: string; // e.g. "pcs"
+  description: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+interface UnitStore {
+  units: UnitRecord[];
+  addUnit: (data: Omit<UnitRecord, 'id' | 'createdAt'>) => UnitRecord;
+  updateUnit: (id: string, data: Partial<UnitRecord>) => void;
+  deleteUnit: (id: string) => void;
+}
+
+const STORAGE_KEY = 'popmyc-units';
+
+function genId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `unit-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+}
+
+// ── Preset units ──────────────────────────────────────────────────────────────
+const SEED_UNITS: UnitRecord[] = [
+  { id: 'u1',  name: 'Piece',      abbreviation: 'pcs',   description: 'Individual item or piece',             isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u2',  name: 'Pack',       abbreviation: 'pack',  description: 'A packaged group of items',            isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u3',  name: 'Box',        abbreviation: 'box',   description: 'Items packed in a box',                isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u4',  name: 'Bag',        abbreviation: 'bag',   description: 'Items in a bag (e.g. rice bag)',       isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u5',  name: 'Bottle',     abbreviation: 'btl',   description: 'Liquid in a bottle',                   isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u6',  name: 'Carton',     abbreviation: 'ctn',   description: 'Large carton of goods',                isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u7',  name: 'Dozen',      abbreviation: 'doz',   description: '12 units',                             isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u8',  name: 'Kilogram',   abbreviation: 'kg',    description: 'Weight in kilograms',                  isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u9',  name: 'Gram',       abbreviation: 'g',     description: 'Weight in grams',                      isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u10', name: 'Litre',      abbreviation: 'L',     description: 'Volume in litres',                     isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u11', name: 'Millilitre', abbreviation: 'ml',    description: 'Volume in millilitres',                isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u12', name: 'Crate',      abbreviation: 'crate', description: 'A crate of items (e.g. soft drinks)',  isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u13', name: 'Roll',       abbreviation: 'roll',  description: 'Rolled items (e.g. toilet roll)',      isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u14', name: 'Pair',       abbreviation: 'pr',    description: 'Two items sold together',              isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u15', name: 'Tin',        abbreviation: 'tin',   description: 'Items in a tin container',             isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u16', name: 'Sachet',     abbreviation: 'sch',   description: 'Small sachet / pouch',                 isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u17', name: 'Bundle',     abbreviation: 'bndl',  description: 'Bundled group of items',               isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u18', name: 'Sheet',      abbreviation: 'sht',   description: 'Flat sheet item',                      isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u19', name: 'Metre',      abbreviation: 'm',     description: 'Length in metres',                     isActive: true, createdAt: new Date().toISOString() },
+  { id: 'u20', name: 'Set',        abbreviation: 'set',   description: 'A matched set of items',               isActive: true, createdAt: new Date().toISOString() },
+];
+
+function loadState(): UnitRecord[] {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as UnitRecord[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* noop */ }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(SEED_UNITS));
+  return SEED_UNITS;
+}
+
+function persist(units: UnitRecord[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(units));
+}
+
+export const useUnitStore = create<UnitStore>((set) => ({
+  units: loadState(),
+
+  addUnit: (data) => {
+    const newUnit: UnitRecord = { ...data, id: genId(), createdAt: new Date().toISOString() };
+    set((state) => {
+      const next = [...state.units, newUnit];
+      persist(next);
+      return { units: next };
+    });
+    return newUnit;
+  },
+
+  updateUnit: (id, data) => {
+    set((state) => {
+      const next = state.units.map((u) => u.id === id ? { ...u, ...data } : u);
+      persist(next);
+      return { units: next };
+    });
+  },
+
+  deleteUnit: (id) => {
+    set((state) => {
+      const next = state.units.filter((u) => u.id !== id);
+      persist(next);
+      return { units: next };
+    });
+  },
+}));

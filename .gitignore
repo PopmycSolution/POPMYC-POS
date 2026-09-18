@@ -1,0 +1,83 @@
+# ============================================================
+# POPMYC POS — Git Ignore
+# ============================================================
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+backend/.venv-prod/
+backend/venv/
+
+# Django generated files
+staticfiles/
+media/
+*.sqlite3
+db.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Coverage / test output
+.coverage
+htmlcov/
+coverage.xml
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Frontend build
+frontend/dist/
+frontend/.vite/
+
+# Electron builds
+desktop/node_modules/
+desktop/dist/
+desktop/dist-installer/
+desktop/release/
+desktop/win-unpacked/
+
+# IDE / editor
+.vscode/
+.idea/
+.qoder/
+.trae/
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+test_write.txt
+
+# Bundled desktop runtime / binaries
+desktop/runtime/
+desktop/resources/nssm/*.exe
