@@ -8,10 +8,11 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "npx electron-builder --win --x64",
-    "build:dir": "npx electron-builder --win --x64 --dir",
-    "pack": "npx electron-builder --dir",
-    "build:unpacked": "npx electron-builder --win --x64 --dir",
+    "copy:frontend": "node scripts/copy-frontend.js",
+    "build": "node scripts/copy-frontend.js && npx electron-builder --win --x64",
+    "build:dir": "node scripts/copy-frontend.js && npx electron-builder --win --x64 --dir",
+    "pack": "node scripts/copy-frontend.js && npx electron-builder --dir",
+    "build:unpacked": "node scripts/copy-frontend.js && npx electron-builder --win --x64 --dir",
     "build:installer": "node scripts/build-installer.js"
   },
   "dependencies": {

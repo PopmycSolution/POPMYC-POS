@@ -7,10 +7,25 @@ Mounted at /api/v1/cloud/ in config/urls.py
 from django.urls import path
 from . import views
 from . import sync_views
+from . import trial_views
 
 app_name = "cloud"
 
 urlpatterns = [
+    # ── Trial activation (two-phase cloud TrialCode bridge) ───────────────────
+    # These are AllowAny — no prior auth needed (pre-login first-run flow).
+    # Mounted under /api/v1/cloud/ which is already in LicenseCheckMiddleware
+    # BYPASS_PREFIXES, so no additional bypass configuration is needed.
+    path("trial/validate/",
+         trial_views.TrialValidateView.as_view(),
+         name="trial-validate"),
+    path("trial/verify-reservation/",
+         trial_views.TrialVerifyReservationView.as_view(),
+         name="trial-verify-reservation"),
+    path("trial/complete/",
+         trial_views.TrialCompleteView.as_view(),
+         name="trial-complete"),
+
     # ── Status ──────────────────────────────────────────────────────────────
     path("status/",
          views.CloudStatusView.as_view(),

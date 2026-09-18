@@ -33,6 +33,7 @@ import { Button } from '@/components/ui/Button';
 import { APP_NAME } from '@/utils/constants';
 import { Home, ArrowLeft } from 'lucide-react';
 import { fetchSetupStatus } from '@/services/setup.service';
+import { retryPendingCompletion } from '@/services/cloudLicense.service';
 
 // ── Setup guard — checks first-run state once on cold start ───────────────────
 function SetupGuard({ children }: { children: ReactNode }) {
@@ -159,6 +160,23 @@ function NotFound() {
 }
 
 export function App() {
+  // ── Retry any pending cloud activation completion on startup ──────────────
+  // This runs once when the app mounts. It checks localStorage for a pending
+  // cloud TrialCode completion token left over from a previous activation that
+  // failed due to a transient network error (e.g. Render cold-start timeout).
+  //
+  // Properties:
+  //   - Non-blocking: runs in the background; never delays login or POS.
+  //   - Offline-safe: if no token exists or Render is unreachable, does nothing.
+  //   - Idempotent: retryPendingCompletion() removes the token on success and
+  //     leaves it for the next startup on transient failure.
+  //   - No effect on normal POS traffic: only contacts CLOUD_LICENSE_URL.
+  useEffect(() => {
+    retryPendingCompletion().catch(() => {
+      // Already handled internally — fail completely silently here.
+    });
+  }, []); // empty deps — run exactly once on mount
+
   return (
     <Routes>
       {/* DB setup screen — shown by Electron when PostgreSQL/DB is missing */}

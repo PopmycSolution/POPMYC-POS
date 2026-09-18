@@ -115,6 +115,10 @@ function ensureDesktopEnv(dataDir) {
       `SYNC_CLOUD_URL=`,
       `SYNC_CLOUD_TOKEN=`,
       ``,
+      `# Cloud licensing service — used ONLY for first-run trial activation.`,
+      `# DO NOT CHANGE unless directed by POPMYC support.`,
+      `CLOUD_SETUP_URL=https://popmyc-pos.onrender.com`,
+      ``,
       `POPMYC_CELERY_EAGER=True`,
     ].join('\n');
     fs.writeFileSync(envPath, content, 'utf8');

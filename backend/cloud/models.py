@@ -825,3 +825,199 @@ class CloudAuditLog(models.Model):
             metadata=metadata or {},
             ip_address=ip_address,
         )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ActivationReservation — short-lived cloud trial activation token
+# ══════════════════════════════════════════════════════════════════════════════
+
+RESERVATION_EXPIRY_MINUTES = 10
+
+
+class ActivationReservation(models.Model):
+    """
+    Short-lived reservation created during Phase 1 of the two-phase
+    cloud TrialCode activation handshake.
+
+    Lifecycle
+    ---------
+    1.  Desktop calls POST /api/v1/cloud/trial/validate/
+        → Cloud verifies TrialCode is PENDING
+        → Cloud creates ActivationReservation (status=PENDING, expires in 10 min)
+        → Cloud returns reservation_token to the desktop (raw, shown ONCE)
+
+    2.  Desktop sends reservation_token + setup payload to the local
+        POST /api/v1/setup/run/
+        → Local SetupRunView contacts the cloud to confirm the reservation
+          is still valid (Phase 1.5 — inline verify call)
+        → Local creates Business, Branch, Admin, TRIAL License
+        → Only AFTER local commit, desktop calls
+          POST /api/v1/cloud/trial/complete/
+
+    3.  Cloud atomically marks TrialCode as USED and reservation as COMPLETED.
+
+    Security properties
+    -------------------
+    - Raw token is never stored.  Only the SHA-256 hash is persisted.
+    - Token is URL-safe base64, 48 chars (36 random bytes).
+    - Reservation expires after RESERVATION_EXPIRY_MINUTES from creation.
+    - A completed or expired reservation cannot be reused.
+    - trial_code_id is a FK (not the raw code string) — never exposed to client.
+    - No cloud DB credentials, SECRET_KEY, or Django internals are returned.
+
+    Offline safety
+    --------------
+    This model lives only in the cloud (Supabase) database.
+    The local POS database never has this table.
+    Local POS operation does not read or write this model.
+    """
+
+    class ReservationStatus(models.TextChoices):
+        PENDING   = "PENDING",   _("Pending — awaiting completion")
+        COMPLETED = "COMPLETED", _("Completed — TrialCode consumed")
+        EXPIRED   = "EXPIRED",   _("Expired — timed out before completion")
+        CANCELLED = "CANCELLED", _("Cancelled — abandoned")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # FK to the TrialCode being reserved.  We store the ID, not the raw code.
+    trial_code = models.ForeignKey(
+        "licensing.TrialCode",
+        on_delete=models.CASCADE,
+        related_name="reservations",
+        verbose_name=_("Trial Code"),
+        help_text=_("The TrialCode voucher that this reservation holds."),
+    )
+
+    # SHA-256 hash of the raw reservation token (raw token shown ONCE on creation).
+    token_hash = models.CharField(
+        max_length=64,
+        unique=True,
+        verbose_name=_("Token Hash"),
+        help_text=_("SHA-256 of the raw one-time reservation token."),
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=ReservationStatus.choices,
+        default=ReservationStatus.PENDING,
+        verbose_name=_("Status"),
+        db_index=True,
+    )
+
+    expires_at = models.DateTimeField(
+        verbose_name=_("Expires At"),
+        help_text=_("Reservation is invalid after this timestamp."),
+        db_index=True,
+    )
+
+    # Audit metadata — never contains secrets
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name=_("Client IP"),
+    )
+
+    # Populated when status→COMPLETED
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name=_("Completed At"))
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created At"))
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "cloud_activation_reservation"
+        verbose_name = _("Activation Reservation")
+        verbose_name_plural = _("Activation Reservations")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "expires_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Reservation({self.trial_code.code[:8]}… [{self.status}] exp={self.expires_at:%Y-%m-%d %H:%M})"
+
+    # ── Class helpers ──────────────────────────────────────────────────────────
+
+    @classmethod
+    def make_token() -> str:
+        """
+        Generate a fresh URL-safe reservation token (48 chars, 36 random bytes).
+        Returns the raw token — caller must store only the hash.
+        """
+        return secrets.token_urlsafe(36)
+
+    @classmethod
+    def hash_token(cls, raw_token: str) -> str:
+        """Return the SHA-256 hex digest of a raw token."""
+        return hashlib.sha256(raw_token.encode()).hexdigest()
+
+    @classmethod
+    def create_for(
+        cls,
+        trial_code,
+        ip_address: str | None = None,
+    ) -> tuple["ActivationReservation", str]:
+        """
+        Create a new PENDING reservation for the given TrialCode.
+
+        Returns (reservation, raw_token).
+        The raw_token must be returned to the caller and NEVER stored anywhere.
+
+        The trial_code's other PENDING reservations are not cancelled here —
+        expired ones are silently ignored.  Only one reservation can be
+        COMPLETED per trial_code (enforced by TrialCode.status = USED).
+        """
+        raw_token = secrets.token_urlsafe(36)
+        reservation = cls.objects.create(
+            trial_code=trial_code,
+            token_hash=cls.hash_token(raw_token),
+            status=cls.ReservationStatus.PENDING,
+            expires_at=timezone.now() + timezone.timedelta(
+                minutes=RESERVATION_EXPIRY_MINUTES
+            ),
+            ip_address=ip_address,
+        )
+        return reservation, raw_token
+
+    @classmethod
+    def get_valid_by_token(cls, raw_token: str) -> "ActivationReservation | None":
+        """
+        Look up a PENDING, non-expired reservation by raw token.
+        Returns None if the token is unknown, expired, or already used.
+        """
+        token_hash = cls.hash_token(raw_token)
+        try:
+            res = cls.objects.select_related("trial_code").get(
+                token_hash=token_hash,
+                status=cls.ReservationStatus.PENDING,
+            )
+        except cls.DoesNotExist:
+            return None
+
+        if timezone.now() > res.expires_at:
+            # Auto-mark as expired (best-effort; non-atomic is fine here)
+            cls.objects.filter(pk=res.pk).update(
+                status=cls.ReservationStatus.EXPIRED
+            )
+            return None
+
+        return res
+
+    # ── Instance helpers ───────────────────────────────────────────────────────
+
+    @property
+    def is_valid(self) -> bool:
+        """True if this reservation is PENDING and has not yet expired."""
+        return (
+            self.status == self.ReservationStatus.PENDING
+            and timezone.now() <= self.expires_at
+        )
+
+    def complete(self) -> None:
+        """
+        Mark the reservation as COMPLETED and stamp completed_at.
+        Caller is responsible for also marking the TrialCode as USED
+        within the same atomic block.
+        """
+        self.status = self.ReservationStatus.COMPLETED
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "completed_at", "updated_at"])

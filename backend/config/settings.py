@@ -246,3 +246,22 @@ SYNC_CLOUD_TOKEN = os.environ.get(
     "SYNC_CLOUD_TOKEN",
     ""
 )
+
+# ── Cloud licensing service URL ────────────────────────────────────────────────
+# Used by SetupRunView._verify_cloud_reservation() during the first-run
+# cloud TrialCode activation handshake (Phase 1.5).
+#
+# Production default: the live Render deployment.
+# Overrideable via the CLOUD_SETUP_URL environment variable — useful for
+# development, staging, or testing against a local Django instance.
+#
+# Security:
+#   - This is a URL only. No credential, token, or secret is stored here.
+#   - The local POS backend sends only the opaque reservation token to this
+#     URL and receives only {valid: bool}. Nothing else is transmitted.
+#   - Normal POS API traffic never uses this URL.
+#   - Only contacted once during the first-run Setup Wizard activation.
+CLOUD_SETUP_URL = os.environ.get(
+    "CLOUD_SETUP_URL",
+    "https://popmyc-pos.onrender.com",   # production default — no credential
+)

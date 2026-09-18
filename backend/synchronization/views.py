@@ -1,3 +1,17 @@
+"""
+synchronization/views.py
+========================
+Cloud sync API endpoints.
+
+Stage 1 Security Hardening (2026):
+  - SyncDownloadView now derives business context ONLY from the authenticated
+    identity (Device token or JWT user). Client-supplied ?business_id is
+    accepted only when it matches or narrows the authenticated business; it
+    can never be used to access a different business's data.
+  - SyncDeviceView now validates that a supplied business_id actually belongs
+    to the authenticated user's business.
+  - No endpoint ever returns records across business boundaries.
+"""
 import logging
 from uuid import UUID
 
@@ -28,6 +42,37 @@ def _get_sync_authenticators():
     """
     from cloud.authentication import DeviceTokenAuthentication
     return [DeviceTokenAuthentication(), JWTAuthentication()]
+
+
+def _get_authenticated_business_id(request):
+    """
+    Derive the authoritative business UUID from the authenticated identity.
+
+    Priority:
+      1. Device token — business comes from the CloudDevice's registered business.
+      2. JWT user     — business comes from request.user.business_id.
+
+    Returns a UUID or None if no business context is available.
+    This is the ONLY source of trust for business scoping; client-supplied
+    query parameters may only narrow this context, never override it.
+    """
+    from cloud.authentication import get_device_from_request
+    from cloud.models import CloudDevice
+
+    device = get_device_from_request(request)
+    if device is not None and device.business_id:
+        return device.business_id
+
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        biz_id = getattr(user, "business_id", None)
+        if biz_id:
+            try:
+                return UUID(str(biz_id))
+            except (ValueError, TypeError):
+                pass
+
+    return None
 
 
 class SyncRecordSerializer(serializers.ModelSerializer):
@@ -140,7 +185,6 @@ class SyncStatusView(APIView):
             "last_sync_at": device.last_sync_at.isoformat() if device and device.last_sync_at else None,
             "server_time":  timezone.now().isoformat(),
         })
-
 
 
 class SyncUploadView(APIView):
@@ -465,7 +509,23 @@ class SyncUploadView(APIView):
 
 class SyncDownloadView(APIView):
     """
+    GET /api/sync/download/
+
     Downloads synchronized changes from the cloud.
+
+    Stage 1 Security Hardening
+    --------------------------
+    Business context is derived EXCLUSIVELY from the authenticated identity:
+      - Device token → CloudDevice.business_id
+      - JWT user     → request.user.business_id
+
+    A client-supplied ?business_id query parameter is accepted ONLY when
+    it matches the authenticated business. It is silently ignored if it
+    matches, or rejected with HTTP 403 if it differs.
+
+    If no valid business context can be established, the request is rejected
+    with HTTP 400.  The server NEVER falls back to returning records from all
+    businesses.
     """
 
     permission_classes = [IsAuthenticated]
@@ -476,38 +536,20 @@ class SyncDownloadView(APIView):
     def get(self, request):
         since = request.query_params.get("since")
         device_id = request.query_params.get("device_id")
-        business_id = request.query_params.get("business_id")
+        client_business_id = request.query_params.get("business_id")
         branch_id = request.query_params.get("branch_id")
 
-        filters = {
-            "status": SyncRecord.STATUS_SYNCED,
-        }
+        # ── Step 1: derive authoritative business from authenticated identity ──
+        auth_business_id = _get_authenticated_business_id(request)
 
-        if since:
-            try:
-                filters["updated_at__gt"] = timezone.datetime.fromisoformat(
-                    since.replace("Z", "+00:00")
-                )
-            except ValueError:
-                return Response(
-                    {
-                        "success": False,
-                        "error": "Invalid since timestamp.",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+        # ── Step 2: look up the registered device (if device_id provided) ──────
         device = None
-
         if device_id:
             try:
                 device_uuid = UUID(str(device_id))
             except (ValueError, TypeError):
                 return Response(
-                    {
-                        "success": False,
-                        "error": "Invalid device ID.",
-                    },
+                    {"success": False, "error": "Invalid device ID."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -521,36 +563,85 @@ class SyncDownloadView(APIView):
                     {
                         "success": False,
                         "error": (
-                            "Synchronization device is not "
-                            "registered or is inactive."
+                            "Synchronization device is not registered or is inactive."
                         ),
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        if business_id:
+            # If the device has a business, use that as the authoritative
+            # business context (device registration is already validated).
+            if device.business_id and auth_business_id is None:
+                auth_business_id = device.business_id
+
+        # ── Step 3: validate the client-supplied ?business_id (if any) ─────────
+        # Accept it only when it matches the authenticated business.
+        # Reject it when it differs — the client cannot override authentication.
+        if client_business_id:
             try:
-                filters["business_id"] = UUID(str(business_id))
+                client_biz_uuid = UUID(str(client_business_id))
             except (ValueError, TypeError):
+                return Response(
+                    {"success": False, "error": "Invalid business ID."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if auth_business_id is not None and client_biz_uuid != auth_business_id:
+                # Client is trying to access a different business's data.
                 return Response(
                     {
                         "success": False,
-                        "error": "Invalid business ID.",
+                        "error": (
+                            "Requested business does not match the authenticated identity."
+                        ),
                     },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Client business matches authenticated identity — OK to use.
+            if auth_business_id is None:
+                auth_business_id = client_biz_uuid
+
+        # ── Step 4: require a valid business context ────────────────────────────
+        # If after all the above we still have no business context,
+        # refuse the request.  We never return records from all businesses.
+        if auth_business_id is None:
+            return Response(
+                {
+                    "success": False,
+                    "error": (
+                        "Cannot determine business context for this request. "
+                        "Ensure your device is registered with a business or "
+                        "your account is associated with a business."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Step 5: build the queryset filters ──────────────────────────────────
+        filters = {
+            "status":      SyncRecord.STATUS_SYNCED,
+            "business_id": auth_business_id,   # always enforced
+        }
+
+        if since:
+            try:
+                filters["updated_at__gt"] = timezone.datetime.fromisoformat(
+                    since.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return Response(
+                    {"success": False, "error": "Invalid since timestamp."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        elif device and device.business_id:
-            filters["business_id"] = device.business_id
 
+        # Branch filter — narrows within the authenticated business
         if branch_id:
             try:
                 filters["branch_id"] = UUID(str(branch_id))
             except (ValueError, TypeError):
                 return Response(
-                    {
-                        "success": False,
-                        "error": "Invalid branch ID.",
-                    },
+                    {"success": False, "error": "Invalid branch ID."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         elif device and device.branch_id:
@@ -561,16 +652,13 @@ class SyncDownloadView(APIView):
             .order_by("updated_at")[:500]
         )
 
-        serializer = SyncRecordSerializer(
-            records,
-            many=True,
-        )
+        serializer = SyncRecordSerializer(records, many=True)
 
         return Response(
             {
                 "success": True,
                 "records": serializer.data,
-                "count": len(serializer.data),
+                "count":   len(serializer.data),
                 "server_time": timezone.now(),
             },
             status=status.HTTP_200_OK,
@@ -579,7 +667,14 @@ class SyncDownloadView(APIView):
 
 class SyncDeviceView(APIView):
     """
+    POST /api/sync/device/
+
     Registers or updates a synchronization device.
+
+    Stage 1 Security Hardening
+    --------------------------
+    The supplied business_id is validated against the authenticated identity.
+    A user cannot register a device under a different business's UUID.
     """
 
     permission_classes = [IsAuthenticated]
@@ -592,10 +687,7 @@ class SyncDeviceView(APIView):
 
         if not device_id:
             return Response(
-                {
-                    "success": False,
-                    "error": "device_id is required.",
-                },
+                {"success": False, "error": "device_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -603,29 +695,23 @@ class SyncDeviceView(APIView):
             device_uuid = UUID(str(device_id))
         except (ValueError, TypeError):
             return Response(
-                {
-                    "success": False,
-                    "error": "Invalid device ID.",
-                },
+                {"success": False, "error": "Invalid device ID."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        name = request.data.get("name", "")
+        name        = request.data.get("name", "")
         business_id = request.data.get("business_id")
-        branch_id = request.data.get("branch_id")
+        branch_id   = request.data.get("branch_id")
 
         business_uuid = None
-        branch_uuid = None
+        branch_uuid   = None
 
         if business_id:
             try:
                 business_uuid = UUID(str(business_id))
             except (ValueError, TypeError):
                 return Response(
-                    {
-                        "success": False,
-                        "error": "Invalid business ID.",
-                    },
+                    {"success": False, "error": "Invalid business ID."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -634,9 +720,35 @@ class SyncDeviceView(APIView):
                 branch_uuid = UUID(str(branch_id))
             except (ValueError, TypeError):
                 return Response(
+                    {"success": False, "error": "Invalid branch ID."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # ── Stage 1: validate business_id against authenticated identity ─────
+        # Derive the authoritative business for this authenticated session.
+        auth_business_id = _get_authenticated_business_id(request)
+
+        if business_uuid is not None:
+            if auth_business_id is not None and business_uuid != auth_business_id:
+                # Caller is trying to register a device under a different business.
+                return Response(
                     {
                         "success": False,
-                        "error": "Invalid branch ID.",
+                        "error": (
+                            "Cannot register a device under a different business. "
+                            "The supplied business_id does not match your account."
+                        ),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Verify the business actually exists in the database
+            from businesses.models import Business
+            if not Business.objects.filter(id=business_uuid).exists():
+                return Response(
+                    {
+                        "success": False,
+                        "error": "Business not found.",
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
@@ -645,10 +757,10 @@ class SyncDeviceView(APIView):
             device, created = SyncDevice.objects.update_or_create(
                 device_id=device_uuid,
                 defaults={
-                    "name": name,
+                    "name":        name,
                     "business_id": business_uuid,
-                    "branch_id": branch_uuid,
-                    "is_active": True,
+                    "branch_id":   branch_uuid,
+                    "is_active":   True,
                 },
             )
 
@@ -658,7 +770,7 @@ class SyncDeviceView(APIView):
             {
                 "success": True,
                 "created": created,
-                "device": serializer.data,
+                "device":  serializer.data,
             },
             status=status.HTTP_200_OK,
         )

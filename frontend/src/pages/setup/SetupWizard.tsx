@@ -8,12 +8,32 @@
  *   Step 2 — Business details
  *   Step 3 — Branch details
  *   Step 4 — Administrator account
- *   Step 5 — License activation
+ *   Step 5 — License activation (two-phase cloud TrialCode bridge)
  *   → Setup complete → redirect to /login
  *
+ * License activation flow (Step 5)
+ * ---------------------------------
+ * Phase 1 — Cloud validate:
+ *   Frontend calls validateTrialCode() on Render.
+ *   Cloud confirms TrialCode is PENDING and returns a reservation token.
+ *   UI shows a "Code validated" confirmation.
+ *
+ * Phase 2 — Local setup:
+ *   Frontend calls runSetup() on the LOCAL backend (127.0.0.1:8000).
+ *   SetupRunView verifies the reservation is still valid, then atomically
+ *   creates Business, Branch, Admin, and the local TRIAL License.
+ *
+ * Phase 3 — Cloud complete:
+ *   Frontend calls completeTrialActivation() on Render in the background.
+ *   This marks the cloud TrialCode as USED.
+ *   If this call fails transiently, the token is saved to localStorage
+ *   and retried on next startup — the local license is already active.
+ *
+ * IMPORTANT: Normal POS operations continue to use API_BASE_URL (local).
+ * Render is ONLY contacted in Phase 1 and Phase 3.
+ *
  * Design: matches the existing POPMYC POS visual style (dark teal palette,
- * rounded-xl cards, same font + colour variables). Does NOT import or depend
- * on any UI components that require authentication.
+ * rounded-xl cards, same font + colour variables).
  */
 
 import { useState, useEffect } from 'react';
@@ -26,6 +46,10 @@ import {
 import clsx from 'clsx';
 import { fetchSetupStatus, runSetup } from '@/services/setup.service';
 import type { SetupPayload } from '@/services/setup.service';
+import {
+  validateTrialCode,
+  completeTrialActivation,
+} from '@/services/cloudLicense.service';
 import { BUSINESS_CATEGORY_LABELS, type BusinessCategory } from '@/types';
 
 // ── Palette (matches LoginPage) ────────────────────────────────────────────────
@@ -40,7 +64,19 @@ const STEPS = [
   { id: 5, label: 'License',   icon: Key          },
 ];
 
-type LicenseState = 'idle' | 'activating' | 'success' | 'invalid' | 'expired' | 'network' | 'server';
+type LicenseState =
+  | 'idle'
+  | 'validating'     // Phase 1: calling cloud validate
+  | 'validated'      // Phase 1 succeeded — reservation token held
+  | 'activating'     // Phase 2: calling local setup/run
+  | 'completing'     // Phase 3: calling cloud complete (background)
+  | 'success'        // All done
+  | 'invalid'
+  | 'already_used'
+  | 'revoked'
+  | 'expired'
+  | 'network'
+  | 'server';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +136,10 @@ export default function SetupWizard() {
   const [licCode, setLicCode]         = useState('');
   const [licState, setLicState]       = useState<LicenseState>('idle');
   const [licMessage, setLicMessage]   = useState('');
+  // Cloud reservation token from Phase 1 (validateTrialCode).
+  // Passed to SetupRunView so the local backend can verify it before committing.
+  // Also used in Phase 3 to complete the cloud activation after local setup.
+  const [_cloudToken, setCloudToken]  = useState('');
 
   // Per-field server errors (returned from /setup/run/)
   const [fieldErrors, setFieldErrors] = useState<Record<string, Record<string, string>>>({});
@@ -150,23 +190,59 @@ export default function SetupWizard() {
     return true;
   }
 
-  // ── Final submit (step 5) ─────────────────────────────────────────────────
+  // ── Final submit (step 5) — two-phase cloud activation ────────────────────
 
   async function handleActivate() {
-    if (!licCode.trim()) { setLicState('invalid'); setLicMessage('Please enter your license key.'); return; }
-    setLicState('activating');
+    if (!licCode.trim()) {
+      setLicState('invalid');
+      setLicMessage('Please enter your license key.');
+      return;
+    }
     setLicMessage('');
+
+    // ── Phase 1: validate with the cloud ─────────────────────────────────────
+    setLicState('validating');
     setSubmitting(true);
+
+    const validateResult = await validateTrialCode(licCode.trim());
+
+    if (!validateResult.success) {
+      setSubmitting(false);
+      const code = validateResult.errorCode;
+      if (code === 'already_used') {
+        setLicState('already_used');
+        setLicMessage(validateResult.message);
+      } else if (code === 'revoked') {
+        setLicState('revoked');
+        setLicMessage(validateResult.message);
+      } else if (code === 'network_error' || code === 'timeout' || code === 'cloud_unavailable') {
+        setLicState('network');
+        setLicMessage(validateResult.message);
+      } else {
+        setLicState('invalid');
+        setLicMessage(validateResult.message);
+      }
+      return;
+    }
+
+    // Phase 1 succeeded — hold the reservation token
+    const reservationToken = validateResult.reservationToken;
+    setCloudToken(reservationToken);
+    setLicState('validated');
+    setLicMessage(`Code validated ✓ — completing setup…`);
+
+    // ── Phase 2: run local setup with the reservation token ───────────────────
+    setLicState('activating');
 
     const payload: SetupPayload = {
       business: {
-        name: bizName.trim(),
+        name:              bizName.trim(),
         business_category: bizCategory,
-        address: bizAddress.trim(),
-        phone: bizPhone.trim(),
-        email: bizEmail.trim(),
-        currency: bizCurrency.trim() || 'GHS',
-        currency_symbol: bizCurrSymbol.trim() || 'GH₵',
+        address:           bizAddress.trim(),
+        phone:             bizPhone.trim(),
+        email:             bizEmail.trim(),
+        currency:          bizCurrency.trim() || 'GHS',
+        currency_symbol:   bizCurrSymbol.trim() || 'GH₵',
       },
       branch: {
         name: branchName.trim(),
@@ -180,7 +256,10 @@ export default function SetupWizard() {
         password:   adminPass,
       },
       license: {
-        activation_code: licCode.trim().toUpperCase(),
+        // Include the raw code for display/audit but the backend will use
+        // cloud_activation_token as the primary authority when present.
+        activation_code:        licCode.trim().toUpperCase(),
+        cloud_activation_token: reservationToken,
       },
     };
 
@@ -188,15 +267,35 @@ export default function SetupWizard() {
     setSubmitting(false);
 
     if (result.success) {
-      setLicState('success');
-      setLicMessage('License activated! Redirecting to login…');
-      setTimeout(() => navigate('/login', { replace: true }), 2200);
+      // ── Phase 3: complete cloud activation in background ──────────────────
+      // The local license is ALREADY ACTIVE.  This call just records the
+      // consumption on the cloud.  We do NOT block the customer on this.
+      setLicState('completing');
+      setLicMessage('License activated! Finalising cloud registration…');
+
+      completeTrialActivation(reservationToken)
+        .then((completeResult) => {
+          if (!completeResult.success && completeResult.retry) {
+            // Stored in localStorage by completeTrialActivation for later retry.
+            console.warn('[POPMYC] Cloud completion stored for retry on next startup.');
+          }
+        })
+        .catch(() => {
+          // Ignore — retried on next startup via retryPendingCompletion()
+        })
+        .finally(() => {
+          setLicState('success');
+          setLicMessage('License activated! Redirecting to login…');
+          setTimeout(() => navigate('/login', { replace: true }), 2200);
+        });
+
       return;
     }
 
-    // Map server errors to UI states
+    // ── Local setup failed — map server errors to UI states ──────────────────
+    // The cloud reservation is still valid (10 min window); customer can retry
+    // the setup without re-validating the code.
     if (result.errors) {
-      // Build flat fieldErrors map for the form
       const flat: Record<string, Record<string, string>> = {};
       for (const [section, errs] of Object.entries(result.errors)) {
         flat[section] = {};
@@ -206,15 +305,30 @@ export default function SetupWizard() {
       }
       setFieldErrors(flat);
 
-      // If the error is specifically about the license code, stay on step 5
-      if (result.errors.license?.activation_code) {
-        const msg = flat.license.activation_code.toLowerCase();
-        if (msg.includes('expired')) { setLicState('expired'); }
-        else if (msg.includes('invalid') || msg.includes('not found')) { setLicState('invalid'); }
-        else { setLicState('server'); }
-        setLicMessage(flat.license.activation_code);
+      if (
+        result.errors.license?.activation_code ||
+        result.errors.license?.cloud_activation_token
+      ) {
+        const msg = (
+          flat.license?.activation_code ??
+          flat.license?.cloud_activation_token ??
+          ''
+        ).toLowerCase();
+        if (msg.includes('expired') || msg.includes('reservation')) {
+          // Reservation expired during setup — must re-validate
+          setCloudToken('');
+          setLicState('expired');
+          setLicMessage(
+            'The activation reservation expired. Please enter your code again to restart activation.'
+          );
+        } else if (msg.includes('invalid') || msg.includes('not found')) {
+          setLicState('invalid');
+          setLicMessage(flat.license?.activation_code ?? flat.license?.cloud_activation_token ?? msg);
+        } else {
+          setLicState('server');
+          setLicMessage(flat.license?.cloud_activation_token ?? flat.license?.activation_code ?? msg);
+        }
       } else {
-        // Errors in earlier steps — go back to that step
         if (result.errors.admin)     { setStep(4); setLicState('idle'); }
         else if (result.errors.branch)   { setStep(3); setLicState('idle'); }
         else if (result.errors.business) { setStep(2); setLicState('idle'); }
@@ -224,9 +338,9 @@ export default function SetupWizard() {
 
     // Generic / network errors
     const errMsg = (result.error ?? '').toLowerCase();
-    if (errMsg.includes('network') || errMsg.includes('unavailable')) {
+    if (errMsg.includes('network') || errMsg.includes('unavailable') || errMsg.includes('connection')) {
       setLicState('network');
-      setLicMessage('Cannot reach the server. Check your connection and try again.');
+      setLicMessage('Cannot reach the local server. Check your connection and try again.');
     } else if (errMsg.includes('already complete')) {
       setLicState('success');
       setLicMessage('Setup is already complete. Redirecting…');
@@ -548,18 +662,29 @@ export default function SetupWizard() {
                 <label className="label">License Key <Req /></label>
                 <input
                   className={clsx(
-                    inputCls(licState === 'invalid' || licState === 'expired' || licState === 'server' ? 'err' : undefined),
+                    inputCls(licState === 'invalid' || licState === 'already_used' || licState === 'revoked' || licState === 'expired' || licState === 'server' ? 'err' : undefined),
                     'font-mono tracking-widest text-center text-sm uppercase',
                   )}
                   value={licCode}
                   onChange={e => {
                     setLicCode(e.target.value.toUpperCase());
+                    // Reset states so the user can try again.
+                    // Keep cloudToken if validated — no need to re-validate
+                    // unless the code itself changes.
+                    if (e.target.value.toUpperCase() !== licCode) {
+                      setCloudToken('');
+                    }
                     setLicState('idle');
                     setLicMessage('');
                   }}
                   placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
                   maxLength={30}
-                  disabled={licState === 'activating' || licState === 'success'}
+                  disabled={
+                    licState === 'validating' ||
+                    licState === 'activating' ||
+                    licState === 'completing' ||
+                    licState === 'success'
+                  }
                 />
                 <p className="mt-1 text-[11px] text-slate-400">
                   Contact POPMYC support if you don't have a license key.
@@ -570,39 +695,58 @@ export default function SetupWizard() {
               {licState !== 'idle' && (
                 <div className={clsx(
                   'flex items-start gap-3 rounded-xl px-4 py-3 mb-5 text-sm',
-                  licState === 'activating' ? 'bg-slate-50 border border-slate-200'                 :
-                  licState === 'success'    ? 'bg-emerald-50 border border-emerald-200'              :
-                  licState === 'network'    ? 'bg-amber-50 border border-amber-200'                  :
-                                             'bg-red-50 border border-red-200',
+                  licState === 'validating' || licState === 'activating' || licState === 'completing'
+                    ? 'bg-slate-50 border border-slate-200'
+                  : licState === 'validated'
+                    ? 'bg-blue-50 border border-blue-200'
+                  : licState === 'success'
+                    ? 'bg-emerald-50 border border-emerald-200'
+                  : licState === 'network'
+                    ? 'bg-amber-50 border border-amber-200'
+                  : 'bg-red-50 border border-red-200',
                 )}>
-                  {licState === 'activating' && <Loader2 className="h-5 w-5 text-slate-400 animate-spin shrink-0 mt-0.5" />}
-                  {licState === 'success'    && <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />}
-                  {licState === 'network'    && <WifiOff className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />}
-                  {(licState === 'invalid' || licState === 'expired' || licState === 'server') &&
+                  {(licState === 'validating' || licState === 'activating' || licState === 'completing') &&
+                    <Loader2 className="h-5 w-5 text-slate-400 animate-spin shrink-0 mt-0.5" />}
+                  {licState === 'validated' &&
+                    <CheckCircle2 className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />}
+                  {licState === 'success' &&
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />}
+                  {licState === 'network' &&
+                    <WifiOff className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />}
+                  {(licState === 'invalid' || licState === 'already_used' || licState === 'revoked' || licState === 'expired' || licState === 'server') &&
                     <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />}
 
                   <div>
                     <p className={clsx(
                       'font-semibold',
-                      licState === 'activating' ? 'text-slate-700'    :
-                      licState === 'success'    ? 'text-emerald-700'  :
-                      licState === 'network'    ? 'text-amber-700'    :
-                                                 'text-red-700',
+                      licState === 'validating' || licState === 'activating' || licState === 'completing'
+                        ? 'text-slate-700'
+                      : licState === 'validated'  ? 'text-blue-700'
+                      : licState === 'success'    ? 'text-emerald-700'
+                      : licState === 'network'    ? 'text-amber-700'
+                      : 'text-red-700',
                     )}>
-                      {licState === 'activating' ? 'Activating license…'         :
-                       licState === 'success'    ? 'License activated!'           :
-                       licState === 'invalid'    ? 'Invalid license key'          :
-                       licState === 'expired'    ? 'License has expired'          :
-                       licState === 'network'    ? 'Network unavailable'          :
-                                                  'Activation failed'}
+                      {licState === 'validating'  ? 'Checking code with POPMYC…'    :
+                       licState === 'validated'   ? 'Code verified ✓'               :
+                       licState === 'activating'  ? 'Setting up your account…'       :
+                       licState === 'completing'  ? 'Finalising activation…'          :
+                       licState === 'success'     ? 'License activated!'              :
+                       licState === 'invalid'     ? 'Invalid license key'             :
+                       licState === 'already_used'? 'Code already used'              :
+                       licState === 'revoked'     ? 'Code has been revoked'           :
+                       licState === 'expired'     ? 'Activation timed out'            :
+                       licState === 'network'     ? 'Network unavailable'             :
+                                                    'Activation failed'}
                     </p>
                     {licMessage && (
                       <p className={clsx(
                         'text-xs mt-0.5',
-                        licState === 'activating' ? 'text-slate-500'  :
-                        licState === 'success'    ? 'text-emerald-600':
-                        licState === 'network'    ? 'text-amber-600'  :
-                                                   'text-red-600',
+                        licState === 'validating' || licState === 'activating' || licState === 'completing'
+                          ? 'text-slate-500'
+                        : licState === 'validated'  ? 'text-blue-600'
+                        : licState === 'success'    ? 'text-emerald-600'
+                        : licState === 'network'    ? 'text-amber-600'
+                        : 'text-red-600',
                       )}>
                         {licMessage}
                       </p>
@@ -614,18 +758,22 @@ export default function SetupWizard() {
               {/* Activate button */}
               <button
                 type="button"
-                disabled={submitting || licState === 'success'}
+                disabled={submitting || licState === 'success' || licState === 'completing'}
                 onClick={handleActivate}
                 className="w-full h-11 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed mb-3"
                 style={{ background: TEAL }}
               >
-                {submitting
-                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Activating…</>
+                {licState === 'validating'
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Checking code…</>
+                : licState === 'activating'
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Setting up…</>
+                : licState === 'completing'
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Finalising…</>
                   : <><Key className="h-4 w-4" /> Activate License</>
                 }
               </button>
 
-              {/* Offline notice */}
+              {/* Internet requirement notice */}
               <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-[11px] text-slate-500">
                 <Wifi className="h-4 w-4 shrink-0 text-slate-400" />
                 <span>

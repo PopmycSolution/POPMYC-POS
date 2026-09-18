@@ -37,6 +37,45 @@ Security model
 - No secrets, database credentials, or Django internals are exposed in
   responses.
 
+Cloud TrialCode activation (Stage 7 bridge)
+--------------------------------------------
+The customer may supply a cloud_activation_token inside the license section:
+
+    "license": {
+        "activation_code":        "XXXX-XXXX-XXXX-XXXX-XXXX",
+        "cloud_activation_token": "<reservation token from /cloud/trial/validate/>"
+    }
+
+When cloud_activation_token is present the flow becomes:
+
+  Phase 1 (already done by frontend):
+    Frontend called POST /api/v1/cloud/trial/validate/ on Render.
+    Render verified the TrialCode is PENDING and returned a reservation token.
+    Token is short-lived (10 minutes).
+
+  Phase 1.5 (this view):
+    SetupRunView calls POST /api/v1/cloud/trial/verify-reservation/ on Render
+    to confirm the token is still valid *before* any DB writes.
+    If the token has expired → 400, customer must restart.
+
+  Phase 2 (atomic local setup):
+    SetupRunView creates Business, Branch, Admin, local TRIAL License using
+    the existing create_trial_license() helper — identical audit trail.
+    The local TrialCode row is NOT required (the cloud is the authority).
+
+  Phase 3 (after commit — handled by frontend):
+    Frontend calls POST /api/v1/cloud/trial/complete/ on Render to
+    atomically mark the cloud TrialCode as USED.
+    If this call fails transiently, the local license is still active and
+    the frontend retries from localStorage.
+
+IMPORTANT OFFLINE SAFETY:
+- The cloud verify-reservation call is only made when a cloud_activation_token
+  is present.  Existing paths (no code, local TrialCode, paid License) are
+  completely unchanged and work without any network access.
+- If CLOUD_SETUP_URL is not configured, the cloud token path falls back
+  gracefully with a clear error (not a silent bypass).
+
 Assumptions
 -----------
 - POPMYC staff have already created a License record (status=PENDING) for
@@ -47,6 +86,9 @@ Assumptions
   CustomUser with business=None separately).
 """
 
+import logging
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -64,6 +106,7 @@ from licensing.serializers import ActivateLicenseSerializer, LicenseStatusSerial
 from licensing.services import create_trial_license, generate_trial_code
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -104,6 +147,75 @@ def _is_setup_complete() -> bool:
 def _safe_error(msg: str) -> dict:
     """Return a structured error response that never leaks internals."""
     return {"success": False, "error": str(msg)}
+
+
+def _verify_cloud_reservation(raw_token: str) -> tuple[bool, str]:
+    """
+    Call the cloud verify-reservation endpoint to confirm that
+    an ActivationReservation is still PENDING and not expired.
+
+    Returns (is_valid: bool, error_message: str).
+
+    This is a synchronous HTTP call made BEFORE the local atomic setup
+    begins.  It is the only network call in the setup flow — everything
+    else runs locally.
+
+    Security notes:
+    - We only send the opaque token, nothing else.
+    - We only receive {valid, trial_days, expires_in_seconds}.
+    - No cloud DB credential or secret is transmitted.
+    - If CLOUD_SETUP_URL is not configured we return an explicit error
+      rather than silently bypassing the check.
+    - Timeout is 10 seconds — enough for a slow Render cold-start.
+    """
+    import urllib.request
+    import urllib.error
+    import json
+
+    cloud_url = getattr(settings, "CLOUD_SETUP_URL", "").rstrip("/")
+    if not cloud_url:
+        return False, (
+            "Cloud licensing service URL is not configured on this server. "
+            "Contact your POPMYC administrator."
+        )
+
+    endpoint = f"{cloud_url}/api/v1/cloud/trial/verify-reservation/"
+    payload = json.dumps({"reservation_token": raw_token}).encode()
+
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode())
+            if body.get("valid"):
+                return True, ""
+            return False, (
+                "The activation reservation is no longer valid or has expired. "
+                "Please restart the activation process."
+            )
+    except urllib.error.HTTPError as exc:
+        logger.warning("Cloud reservation verify HTTP error: %s", exc.code)
+        return False, (
+            "Could not verify the activation reservation with the cloud service. "
+            "Please check your internet connection and try again."
+        )
+    except (urllib.error.URLError, OSError) as exc:
+        logger.warning("Cloud reservation verify network error: %s", exc)
+        return False, (
+            "Cannot reach the POPMYC cloud service. "
+            "Please check your internet connection and try again."
+        )
+    except Exception as exc:
+        logger.exception("Cloud reservation verify unexpected error: %s", exc)
+        return False, (
+            "An unexpected error occurred while verifying your activation. "
+            "Please try again."
+        )
 
 
 # ── Views ─────────────────────────────────────────────────────────────────────
@@ -164,9 +276,17 @@ class SetupRunView(APIView):
             "password":   "SecurePass@123"
         },
         "license": {
-            "activation_code": "ABCD-1234-EFGH-5678-IJKL"
+            "activation_code":        "XXXX-XXXX-XXXX-XXXX-XXXX",  // optional
+            "cloud_activation_token": "<reservation token>"          // optional, from cloud validate
         }
     }
+
+    License activation paths (unchanged + new):
+      PATH A: no code, no token  → auto-create 7-day trial (original behaviour)
+      PATH B: local TrialCode    → TrialCode.claim() (original behaviour)
+      PATH C: paid License code  → ActivateLicenseSerializer (original behaviour)
+      PATH D: cloud token        → verify reservation, then create_trial_license()
+                                   (new — cloud TrialCode bridge)
 
     Returns:
         200 OK  on success
@@ -210,11 +330,14 @@ class SetupRunView(APIView):
         if not admin_data.get("email", "").strip():
             errors.setdefault("admin", {})["email"] = "Email is required."
 
-        # License — activation code is OPTIONAL for fresh installations.
-        # If omitted, a 7-day trial license is created automatically.
-        # If supplied, it is validated against the existing licensing system.
-        raw_code = license_data.get("activation_code", "").strip().upper()
-        use_trial = not raw_code
+        # License — both fields are optional; logic determined below.
+        raw_code    = license_data.get("activation_code", "").strip().upper()
+        cloud_token = license_data.get("cloud_activation_token", "").strip()
+
+        # PATH D takes precedence when a cloud token is present.
+        # PATH A is used when neither code nor token is supplied.
+        use_cloud_token = bool(cloud_token)
+        use_trial       = not raw_code and not cloud_token
 
         if errors:
             return Response(
@@ -224,7 +347,6 @@ class SetupRunView(APIView):
 
         # ── Password validation (before DB work) ──────────────────────────────
         password = admin_data["password"]
-        # Build a temporary User instance for Django's validators
         tmp_user = User(
             username=admin_data["username"].strip(),
             email=admin_data.get("email", "").strip(),
@@ -239,7 +361,7 @@ class SetupRunView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Username / email uniqueness check (before DB work) ────────────────
+        # ── Username uniqueness check (before DB work) ────────────────────────
         username = admin_data["username"].strip()
         email    = admin_data.get("email", "").strip()
 
@@ -249,26 +371,42 @@ class SetupRunView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Activation code pre-check (only when code was supplied) ──────────
-        # Three possible paths:
-        #   1. No code supplied             → auto-create trial (PATH A)
-        #   2. Code matches a TrialCode     → claim pre-issued trial (PATH B)
-        #   3. Code matches a License       → paid activation (existing path)
-        pending_license  = None
+        # ── PATH D: Cloud token — verify reservation before any DB writes ─────
+        # This is the ONLY network call in the setup flow.
+        # If the reservation has expired the customer must restart activation.
+        # If CLOUD_SETUP_URL is unconfigured we reject rather than silently
+        # creating an un-tracked trial (security requirement).
+        if use_cloud_token:
+            valid, err_msg = _verify_cloud_reservation(cloud_token)
+            if not valid:
+                return Response(
+                    {
+                        "success": False,
+                        "errors": {
+                            "license": {
+                                "cloud_activation_token": err_msg
+                            }
+                        },
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # ── Activation code pre-check for PATH B / PATH C ────────────────────
+        # (Only when a raw code is supplied and no cloud token is present.)
+        pending_license    = None
         pending_trial_code = None
 
-        if not use_trial:
-            # Check TrialCode first (Path B)
+        if raw_code and not use_cloud_token:
+            # Check TrialCode first (Path B — local trial code)
             trial_code_obj = TrialCode.objects.filter(
                 code=raw_code,
                 status=TrialCode.TrialStatus.PENDING,
             ).first()
 
             if trial_code_obj:
-                # It's a valid pre-issued trial code
                 pending_trial_code = trial_code_obj
             else:
-                # Check if it's a paid License code (existing Path C)
+                # Check if it's a paid License code (Path C)
                 if not License.objects.filter(activation_code=raw_code).exists():
                     return Response(
                         {
@@ -291,7 +429,10 @@ class SetupRunView(APIView):
                     )
                 except License.DoesNotExist:
                     return Response(
-                        {"success": False, "errors": {"license": {"activation_code": "Invalid activation code."}}},
+                        {
+                            "success": False,
+                            "errors": {"license": {"activation_code": "Invalid activation code."}},
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -299,21 +440,32 @@ class SetupRunView(APIView):
                     return Response(
                         {
                             "success": False,
-                            "errors": {"license": {"activation_code": "This license has been revoked. Contact POPMYC support."}},
+                            "errors": {
+                                "license": {
+                                    "activation_code": (
+                                        "This license has been revoked. "
+                                        "Contact POPMYC support."
+                                    )
+                                }
+                            },
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-        # ── Atomic setup ──────────────────────────────────────────────────────
+        # ── Atomic local setup ────────────────────────────────────────────────
         try:
             with transaction.atomic():
-                # 1. Create (or reuse) the Business
-                # When using a pre-issued activation code, POPMYC may have already
-                # linked a Business to the License.  In the trial path (no code),
-                # we always create a fresh Business from the wizard data.
-                if not use_trial and pending_license is not None and pending_license.business:
+                # 1. Create (or reuse) the Business.
+                # For PATH C: if the paid License already has a linked Business,
+                # reuse it and update the wizard fields.
+                # For all other paths: create a fresh Business.
+                if (
+                    not use_trial
+                    and not use_cloud_token
+                    and pending_license is not None
+                    and pending_license.business
+                ):
                     business = pending_license.business
-                    # Sync any overrideable fields from the wizard
                     business.name    = biz_data.get("name", business.name).strip()
                     business.address = biz_data.get("address", business.address).strip()
                     business.phone   = biz_data.get("phone",   business.phone).strip()
@@ -326,7 +478,6 @@ class SetupRunView(APIView):
                         business.currency_symbol = biz_data["currency_symbol"]
                     business.save()
                 else:
-                    # Trial path (or code path where no business was pre-linked)
                     business = Business.objects.create(
                         name              = biz_data["name"].strip(),
                         business_category = biz_data.get("business_category", "GENERAL_RETAIL"),
@@ -336,60 +487,85 @@ class SetupRunView(APIView):
                         currency          = biz_data.get("currency", "GHS"),
                         currency_symbol   = biz_data.get("currency_symbol", "GH₵"),
                     )
-                    if not use_trial and pending_license is not None:
-                        # Link license to the newly created business
+                    if (
+                        not use_trial
+                        and not use_cloud_token
+                        and pending_license is not None
+                    ):
                         pending_license.business = business
                         pending_license.save(update_fields=["business", "updated_at"])
 
-                # 2. Create BusinessSettings if absent
+                # 2. BusinessSettings
                 BusinessSettings.objects.get_or_create(business=business)
 
-                # 3. Create the head-office Branch
+                # 3. Head-office Branch
                 branch_name = branch_data.get("name", "Main Branch").strip()
                 branch_code = branch_data.get("code", "MAIN").strip().upper()
-                # Ensure code uniqueness within the business
                 if Branch.objects.filter(business=business, code=branch_code).exists():
                     branch_code = branch_code + "1"
                 branch = Branch.objects.create(
-                    business      = business,
-                    name          = branch_name,
-                    code          = branch_code,
+                    business       = business,
+                    name           = branch_name,
+                    code           = branch_code,
                     is_head_office = True,
-                    is_active     = True,
-                    phone         = biz_data.get("phone", "").strip(),
-                    address       = biz_data.get("address", "").strip(),
+                    is_active      = True,
+                    phone          = biz_data.get("phone", "").strip(),
+                    address        = biz_data.get("address", "").strip(),
                 )
 
-                # 4. Create the super-admin user
+                # 4. Super-admin user
                 admin_user = User.objects.create_user(
-                    username   = username,
-                    email      = email,
-                    password   = password,
-                    first_name = admin_data.get("first_name", "").strip(),
-                    last_name  = admin_data.get("last_name", "").strip(),
-                    is_staff   = True,
+                    username     = username,
+                    email        = email,
+                    password     = password,
+                    first_name   = admin_data.get("first_name", "").strip(),
+                    last_name    = admin_data.get("last_name", "").strip(),
+                    is_staff     = True,
                     is_superuser = True,
                 )
                 admin_user.business = business
                 admin_user.branch   = branch
                 admin_user.save(update_fields=["business", "branch", "updated_at"])
 
-                # 5. Activate the license
-                # Three paths:
-                #   a) Auto-trial (no code)      → create_trial_license()
-                #   b) Pre-issued trial code      → TrialCode.claim()
-                #   c) Paid code                 → ActivateLicenseSerializer
+                # 5. Activate the license — four paths:
+                #   A) Auto-trial (no code, no token)  → create_trial_license()
+                #   B) Local TrialCode voucher         → TrialCode.claim()
+                #   C) Paid License code               → ActivateLicenseSerializer
+                #   D) Cloud reservation token         → create_trial_license()
+                #      (TrialCode lives in cloud DB; local DB has no row for it.
+                #       The cloud verify-reservation call above already confirmed
+                #       the code is valid.  We create the local license using the
+                #       same helper as PATH A — the audit trail is identical.)
+
                 if use_trial:
+                    # PATH A
                     activated_license = create_trial_license(
                         business=business, performed_by=admin_user
                     )
+
+                elif use_cloud_token:
+                    # PATH D — cloud TrialCode bridge
+                    # create_trial_license() creates + activates a 7-day TRIAL
+                    # License and writes a TRIAL_ACTIVATION LicenseRenewalLog entry.
+                    # This is the same local data structure used by PATH A/B.
+                    activated_license = create_trial_license(
+                        business=business, performed_by=admin_user
+                    )
+                    # Note the token itself in the license notes for auditability.
+                    activated_license.notes = (
+                        "7-day trial activated via cloud TrialCode reservation. "
+                        f"Reservation token prefix: {cloud_token[:8]}…"
+                    )
+                    activated_license.save(update_fields=["notes", "updated_at"])
+
                 elif pending_trial_code is not None:
-                    # Path B: pre-issued trial voucher — 7 days start NOW
+                    # PATH B — local TrialCode.claim()
                     activated_license = pending_trial_code.claim(
                         business=business, performed_by=admin_user
                     )
+
                 else:
-                    # Path C: paid activation code
+                    # PATH C — paid activation code
                     activate_ser = ActivateLicenseSerializer(
                         data={"activation_code": raw_code},
                         context={"business": business, "user": admin_user},
@@ -398,9 +574,7 @@ class SetupRunView(APIView):
                     activated_license = activate_ser.save()
 
         except Exception as exc:
-            # Don't leak internal error details to the client
-            import logging
-            logging.getLogger("setup").exception("Setup failed: %s", exc)
+            logger.exception("Setup failed: %s", exc)
             return Response(
                 {
                     "success": False,
@@ -412,14 +586,14 @@ class SetupRunView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # ── Return a minimal success payload ──────────────────────────────────
+        # ── Return success payload ─────────────────────────────────────────────
         return Response(
             {
                 "success": True,
-                "business_id":  str(business.id),
-                "branch_id":    str(branch.id),
+                "business_id":    str(business.id),
+                "branch_id":      str(branch.id),
                 "admin_username": admin_user.username,
-                "license": LicenseStatusSerializer(activated_license).data,
+                "license":        LicenseStatusSerializer(activated_license).data,
             },
             status=status.HTTP_200_OK,
         )

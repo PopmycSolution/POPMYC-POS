@@ -51,6 +51,8 @@ export interface SetupPayload {
   };
   license: {
     activation_code: string;
+    /** Optional cloud reservation token from Phase 1 cloud validation. */
+    cloud_activation_token?: string;
   };
 }
 
