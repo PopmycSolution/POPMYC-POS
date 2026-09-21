@@ -355,3 +355,154 @@ class TestCloudSettingsModule(TestCase):
             mod.SECURE_PROXY_SSL_HEADER,
             ("HTTP_X_FORWARDED_PROTO", "https"),
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# J. CORS configuration — Electron desktop origin must be allowed
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestCORSConfig(TestCase):
+    """
+    Verify that the CORS_ALLOWED_ORIGINS default includes all required origins,
+    including http://127.0.0.1:8000 which is used by the Electron desktop app
+    when it makes cross-origin requests to the Render cloud backend during
+    first-run trial activation.
+    """
+
+    def _load_with_env(self, env_override: dict):
+        """Reload config.settings with a specific environment."""
+        return _reload_settings({"DJANGO_SECRET_KEY": "test-secret", "DB_PORT": "5432",
+                                  **env_override})
+
+    # ── Default origins ────────────────────────────────────────────────────────
+
+    def test_default_includes_localhost_vite(self):
+        """Vite dev server origin must be present in the default."""
+        s = self._load_with_env({})
+        self.assertIn("http://localhost:5173", s.CORS_ALLOWED_ORIGINS)
+
+    def test_default_includes_localhost_3000(self):
+        """CRA / alternative dev server origin must be present in the default."""
+        s = self._load_with_env({})
+        self.assertIn("http://localhost:3000", s.CORS_ALLOWED_ORIGINS)
+
+    def test_default_includes_electron_desktop_origin(self):
+        """
+        http://127.0.0.1:8000 MUST be in the default CORS_ALLOWED_ORIGINS.
+
+        The Electron desktop app loads the React SPA from http://127.0.0.1:8000
+        (served by the local Django/WhiteNoise backend).  During first-run trial
+        activation, the SPA makes a cross-origin POST to Render:
+
+            POST https://popmyc-pos.onrender.com/api/v1/cloud/trial/validate/
+
+        Chromium (inside Electron) will include:
+
+            Origin: http://127.0.0.1:8000
+
+        Render's django-cors-headers middleware must respond with:
+
+            Access-Control-Allow-Origin: http://127.0.0.1:8000
+
+        If this origin is absent from CORS_ALLOWED_ORIGINS on Render, the
+        browser blocks the response and the activation fails silently.
+        """
+        s = self._load_with_env({})
+        self.assertIn(
+            "http://127.0.0.1:8000",
+            s.CORS_ALLOWED_ORIGINS,
+            msg=(
+                "http://127.0.0.1:8000 must be in CORS_ALLOWED_ORIGINS so the "
+                "Electron desktop app can call the Render cloud trial-validation "
+                "endpoint during first-run activation."
+            ),
+        )
+
+    def test_cors_allow_credentials_is_true(self):
+        """CORS_ALLOW_CREDENTIALS must remain True."""
+        s = self._load_with_env({})
+        self.assertTrue(s.CORS_ALLOW_CREDENTIALS)
+
+    # ── Environment variable override ──────────────────────────────────────────
+
+    def test_env_var_overrides_default(self):
+        """When CORS_ALLOWED_ORIGINS is set, the env value is used."""
+        s = self._load_with_env({
+            "CORS_ALLOWED_ORIGINS": "https://app.example.com,https://admin.example.com"
+        })
+        self.assertIn("https://app.example.com",   s.CORS_ALLOWED_ORIGINS)
+        self.assertIn("https://admin.example.com", s.CORS_ALLOWED_ORIGINS)
+        # Default origins are NOT present when overridden by env
+        self.assertNotIn("http://localhost:5173", s.CORS_ALLOWED_ORIGINS)
+
+    def test_env_var_whitespace_is_stripped(self):
+        """Whitespace around comma-separated values must be stripped cleanly."""
+        s = self._load_with_env({
+            "CORS_ALLOWED_ORIGINS": "  https://app.example.com ,  https://admin.example.com  "
+        })
+        self.assertIn("https://app.example.com",   s.CORS_ALLOWED_ORIGINS)
+        self.assertIn("https://admin.example.com", s.CORS_ALLOWED_ORIGINS)
+        # Values with leading/trailing spaces must not appear
+        self.assertNotIn("  https://app.example.com ", s.CORS_ALLOWED_ORIGINS)
+
+    def test_env_var_empty_entries_are_excluded(self):
+        """Trailing comma or double comma must not produce empty string entries."""
+        s = self._load_with_env({
+            "CORS_ALLOWED_ORIGINS": "https://app.example.com,,https://admin.example.com,"
+        })
+        self.assertNotIn("", s.CORS_ALLOWED_ORIGINS)
+        self.assertEqual(len(s.CORS_ALLOWED_ORIGINS), 2)
+
+    def test_cors_origins_is_a_list(self):
+        """CORS_ALLOWED_ORIGINS must be a list (not a comma-separated string)."""
+        s = self._load_with_env({})
+        self.assertIsInstance(s.CORS_ALLOWED_ORIGINS, list)
+
+    # ── Live endpoint CORS header test ─────────────────────────────────────────
+
+    def test_trial_validate_endpoint_returns_acao_for_electron_origin(self):
+        """
+        GET (preflight equivalent) to the trial-validate endpoint with
+        Origin: http://127.0.0.1:8000 must receive a CORS Allow header.
+
+        django-cors-headers adds Access-Control-Allow-Origin to any response
+        when the Origin matches CORS_ALLOWED_ORIGINS.  This test verifies the
+        full middleware integration end-to-end using Django's test client.
+        """
+        from django.test import override_settings
+
+        with override_settings(
+            CLOUD_ENABLED=True,
+            CORS_ALLOWED_ORIGINS=["http://127.0.0.1:8000"],
+            CORS_ALLOW_CREDENTIALS=True,
+        ):
+            # OPTIONS preflight for the trial-validate endpoint
+            resp = self.client.options(
+                "/api/v1/cloud/trial/validate/",
+                HTTP_ORIGIN="http://127.0.0.1:8000",
+                HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+                HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type",
+            )
+            # django-cors-headers adds ACAO for matching origins
+            acao = resp.get("Access-Control-Allow-Origin", "")
+            self.assertEqual(
+                acao,
+                "http://127.0.0.1:8000",
+                msg=(
+                    "Expected Access-Control-Allow-Origin: http://127.0.0.1:8000 "
+                    f"in preflight response but got: '{acao}'. "
+                    "Check that CORS_ALLOWED_ORIGINS includes the Electron origin."
+                ),
+            )
+
+    def test_trial_validate_endpoint_default_settings_allow_electron(self):
+        """
+        With default settings (no env override), the Electron origin
+        http://127.0.0.1:8000 must receive Access-Control-Allow-Origin.
+        """
+        s = self._load_with_env({})
+        self.assertIn(
+            "http://127.0.0.1:8000",
+            s.CORS_ALLOWED_ORIGINS,
+            msg="The default CORS_ALLOWED_ORIGINS must include the Electron origin.",
+        )
