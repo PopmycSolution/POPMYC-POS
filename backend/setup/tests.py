@@ -362,3 +362,92 @@ def test_existing_customer_data_preserved_on_restart():
     # Ensure business data is unchanged
     biz = Business.objects.first()
     assert biz.name == "Kofi Stores Ltd"
+
+
+# ── Regression: stale/unlicensed business must not block setup_complete ───────
+
+@pytest.mark.django_db
+def test_setup_complete_true_when_older_unlicensed_business_exists():
+    """
+    Regression test for the bug where _is_setup_complete() returned False
+    because it checked only the OLDEST (first-created) business for an active
+    license, and that oldest business had no license (e.g. a test/sync business
+    created before the real customer setup).
+
+    Expected behaviour:
+    - An old business with NO license exists first.
+    - A second business is created via setup/run/ and gets an ACTIVE TRIAL license.
+    - setup/status/ must report setup_complete=True.
+    - The frontend must proceed to the login screen, not the setup wizard.
+    """
+    from businesses.models import Business
+
+    # Create an older business with no license (simulates a sync-test or
+    # demo business that was created before the real customer did setup).
+    old_biz = Business.objects.create(
+        name="POPMYC SYNC TEST",
+        business_category="GENERAL_RETAIL",
+    )
+    # Confirm it genuinely has no license
+    from licensing.models import License as L
+    assert not L.objects.filter(business=old_biz).exists()
+
+    # Now run the real customer setup — this creates the actual business + license.
+    lic = _make_license()
+    resp = _client().post(
+        "/api/v1/setup/run/",
+        _setup_payload(lic.activation_code),
+        format="json",
+    )
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["success"] is True
+
+    # The real business was created AFTER the stale one.
+    # setup_complete must still be True.
+    status_resp = _client().get("/api/v1/setup/status/")
+    assert status_resp.status_code == 200
+    data = status_resp.json()
+    assert data["setup_complete"] is True, (
+        "setup_complete must be True even when an older unlicensed business exists. "
+        "Check _is_setup_complete(): it must check ANY active license, not only the "
+        "oldest business's license."
+    )
+
+
+@pytest.mark.django_db
+def test_setup_complete_true_when_older_business_has_pending_license():
+    """
+    Regression: an older business with a PENDING (not yet activated) license
+    must not prevent setup_complete from returning True for a newer business
+    that has a valid ACTIVE license.
+    """
+    from businesses.models import Business
+    from licensing.models import License as L
+
+    # Old business with a PENDING license (never activated)
+    old_biz = Business.objects.create(
+        name="Old Pending Business",
+        business_category="GENERAL_RETAIL",
+    )
+    L.objects.create(
+        business=old_biz,
+        license_type=L.LicenseType.SUBSCRIPTION,
+        status=L.Status.PENDING,
+        activation_code=f"OLD-{uuid.uuid4().hex[:16].upper()}",
+        expiry_date=date.today() + timedelta(days=365),
+    )
+
+    # Real customer setup
+    lic = _make_license()
+    resp = _client().post(
+        "/api/v1/setup/run/",
+        _setup_payload(lic.activation_code),
+        format="json",
+    )
+    assert resp.status_code == 200, resp.json()
+
+    status_resp = _client().get("/api/v1/setup/status/")
+    assert status_resp.status_code == 200
+    assert status_resp.json()["setup_complete"] is True, (
+        "setup_complete must be True even when an older business has a PENDING license."
+    )

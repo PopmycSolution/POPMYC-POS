@@ -119,7 +119,12 @@ def _is_setup_complete() -> bool:
       1. At least one Business exists
       2. At least one Branch exists
       3. At least one CustomUser with a business assigned exists
-      4. That business has an ACTIVE License
+      4. At least one Business has an ACTIVE License
+
+    NOTE: We check whether ANY business has an active license, not just the
+    oldest one.  Early test/sync businesses created before the customer's
+    real setup would otherwise cause this check to return False even when
+    the customer's business has a valid active license.
 
     All checks are server-side.  The frontend must never be trusted to
     report setup as complete on its own.
@@ -130,18 +135,27 @@ def _is_setup_complete() -> bool:
         return False
     if not User.objects.filter(business__isnull=False).exists():
         return False
-    # Check that the first business has an active license
-    first_biz = Business.objects.order_by("created_at").first()
-    if first_biz is None:
+
+    # Check whether ANY business has an active license.
+    # Iterate only over businesses that actually have a license to avoid
+    # N+1 queries on large datasets — filter to businesses with a related
+    # license record, then check activeness in Python.
+    from licensing.models import License as _License
+    active_exists = _License.objects.filter(
+        status=_License.Status.ACTIVE,
+    ).exists()
+
+    if not active_exists:
         return False
-    try:
-        lic = first_biz.license
-        lic.refresh_expiry_status()
-        if not lic.is_active:
-            return False
-    except License.DoesNotExist:
-        return False
-    return True
+
+    # Secondary check: at least one of those active licenses is genuinely
+    # not expired (catches the case where status is ACTIVE but expiry_date
+    # has passed and refresh_expiry_status() hasn't been called yet).
+    for lic in _License.objects.filter(status=_License.Status.ACTIVE).select_related("business"):
+        if lic.is_active:   # uses the model property which checks expiry_date
+            return True
+
+    return False
 
 
 def _safe_error(msg: str) -> dict:
