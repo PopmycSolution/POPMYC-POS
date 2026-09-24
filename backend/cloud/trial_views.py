@@ -53,6 +53,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
+from rest_framework.views import APIView
 
 from .feature_flags import CloudAPIView
 from .models import ActivationReservation
@@ -520,6 +521,127 @@ class TrialCompleteView(CloudAPIView):
                 "completed": True,
                 "trial_days": TRIAL_DAYS,
                 "message": "Trial activation recorded successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Business Registration — receives new-business data from the local desktop POS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BusinessRegistrationView(APIView):
+    """
+    POST /api/v1/cloud/trial/register-business/
+
+    Called by the local POPMYC POS desktop immediately after first-run setup
+    (SetupRunView) to register the newly-created Business with the cloud.
+
+    This makes the business visible in the Render Django admin.
+
+    Idempotent: if a CloudBusinessProfile already exists for the given
+    business_id the record is updated (not duplicated).
+
+    Security:
+      - AllowAny (no prior auth — same as trial activation; pre-login flow).
+      - Intentionally does NOT extend CloudAPIView / CloudEnabledMixin.
+        This endpoint is a setup-time registration call that must succeed
+        regardless of whether CLOUD_ENABLED is True on the Render server.
+        Gating it behind CLOUD_ENABLED would cause HTTP 503 on fresh installs
+        when the flag is False, blocking the customer's initial setup.
+        The LicenseCheckMiddleware already bypasses /api/v1/cloud/ entirely.
+      - Only public business fields are accepted — no DB credentials or secrets.
+      - Rate-limited to prevent abuse.
+
+    Request body (all fields optional except business_id):
+    {
+        "business_id":       "<UUID of the local Business>",
+        "name":              "Kofi Stores Ltd",
+        "business_category": "GENERAL_RETAIL",
+        "address":           "123 Main St, Accra",
+        "phone":             "+233241234567",
+        "email":             "kofi@example.com",
+        "currency":          "GHS",
+        "currency_symbol":   "GH₵",
+        "branch_id":         "<UUID of the head-office Branch>",
+        "branch_name":       "Main Branch",
+        "branch_code":       "MAIN",
+        "cloud_token_prefix": "abcd1234…"   // audit only, first 8 chars
+    }
+
+    Response 200:
+    {
+        "registered": true,
+        "cloud_business_id": "<UUID>",
+        "business_id": "<UUID>"
+    }
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [TrialActivationThrottle]
+
+    def post(self, request):
+        import uuid as _uuid
+        from .models import CloudBusinessProfile
+        from businesses.models import Business
+
+        data = request.data
+
+        # ── Validate business_id ──────────────────────────────────────────────
+        raw_id = data.get("business_id", "")
+        if not raw_id:
+            return Response(
+                {"registered": False, "error": "business_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            business_uuid = _uuid.UUID(str(raw_id))
+        except (ValueError, AttributeError):
+            return Response(
+                {"registered": False, "error": "business_id must be a valid UUID."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Get or create local Business stub ─────────────────────────────────
+        # On the cloud (Render) database the Business row may not exist.
+        # We create a minimal Business record so CloudBusinessProfile can have
+        # a valid FK, or update it if it already exists from a prior sync.
+        business, created = Business.objects.update_or_create(
+            id=business_uuid,
+            defaults={
+                "name":              data.get("name", "Unknown Business")[:255],
+                "business_category": data.get("business_category", "GENERAL_RETAIL"),
+                "address":           data.get("address", ""),
+                "phone":             data.get("phone", ""),
+                "email":             data.get("email", ""),
+                "currency":          data.get("currency", "GHS"),
+                "currency_symbol":   data.get("currency_symbol", "GH₵"),
+            },
+        )
+
+        # ── Create or update CloudBusinessProfile ─────────────────────────────
+        profile, _ = CloudBusinessProfile.objects.update_or_create(
+            business=business,
+            defaults={
+                "cloud_status": CloudBusinessProfile.CloudStatus.ACTIVE,
+                "cloud_registered_at": timezone.now(),
+            },
+        )
+
+        logger.info(
+            "[BusinessReg] Business registered/updated from desktop. "
+            "business_id=%s name=%r branch_id=%s created=%s",
+            business.id,
+            business.name,
+            data.get("branch_id", ""),
+            created,
+        )
+
+        return Response(
+            {
+                "registered":       True,
+                "cloud_business_id": str(profile.id),
+                "business_id":       str(business.id),
             },
             status=status.HTTP_200_OK,
         )

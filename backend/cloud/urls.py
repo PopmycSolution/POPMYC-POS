@@ -32,6 +32,9 @@ urlpatterns = [
     path("trial/complete/",
          trial_views.TrialCompleteView.as_view(),
          name="trial-complete"),
+    path("trial/register-business/",
+         trial_views.BusinessRegistrationView.as_view(),
+         name="trial-register-business"),
 
     # ── Status ──────────────────────────────────────────────────────────────
     path("status/",

@@ -601,6 +601,25 @@ class SetupRunView(APIView):
             )
 
         # ── Return success payload ─────────────────────────────────────────────
+        # ── Cloud business registration (non-blocking, best-effort) ───────────
+        # Runs OUTSIDE the transaction so a cloud failure never rolls back the
+        # local setup. Two layers of resilience:
+        #   1. Immediate push to Render via CLOUD_SETUP_URL/trial/register-business/
+        #   2. SyncRecord queue → retried by SyncWorker on next cycle (offline-safe)
+        try:
+            from cloud.business_registration import sync_business_to_cloud
+            sync_business_to_cloud(
+                business=business,
+                branch=branch,
+                cloud_token=cloud_token,
+            )
+        except Exception as _cloud_exc:
+            # Never fail local setup because of a cloud registration error
+            logger.warning(
+                "Cloud business registration raised unexpectedly: %s",
+                type(_cloud_exc).__name__,
+            )
+
         return Response(
             {
                 "success": True,
