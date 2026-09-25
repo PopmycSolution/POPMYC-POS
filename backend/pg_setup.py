@@ -9,11 +9,18 @@ Communicates via JSON on stdout — never exposes stack traces to the customer.
 
 Usage:
     python pg_setup.py --action check   --data-dir <path>
-    python pg_setup.py --action create  --data-dir <path> --pg-password <password>
+    python pg_setup.py --action create  --data-dir <path>
+    python pg_setup.py --action create  --data-dir <path> --password-file <file>
 
 Actions:
-    check   - Detect PostgreSQL, test DB connection, report status
-    create  - Create the popmyc_pos database using provided PG admin credentials
+    check   - Detect PostgreSQL, test DB connection, report status.
+              Treats a service that is "RUNNING" but not accepting TCP
+              connections as not-running (zombie-running detection).
+    create  - Create the popmyc_pos database and dedicated popmyc_app user.
+              PostgreSQL superuser password is read from stdin OR from
+              --password-file (file path only in argv — never the password
+              itself). The password file is NOT deleted by this script;
+              the caller is responsible for deletion.
 
 Exit codes:
     0 = success (or DB already exists)
@@ -36,10 +43,17 @@ Output format (always valid JSON on stdout):
     }
 
 Security:
-    - pg_password is NEVER written to logs or stdout.
-    - Credentials are used only for the single DB creation operation.
+    - pg (admin) password is NEVER written to logs or stdout.
+    - The PostgreSQL superuser (postgres) is used ONLY for initial provisioning.
+    - A dedicated application user (popmyc_app) is created for Django.
+    - Only the application-user credentials are persisted in .env.
     - Never drops, truncates, or resets existing databases.
-    - Only creates the database if it does not exist.
+    - Only creates the database/user if they do not already exist.
+
+Credential design:
+    - DB_USER  in .env = popmyc_app  (dedicated, limited application user)
+    - DB_PASSWORD in .env = popmyc_app's password (not the postgres superuser password)
+    - The postgres superuser password is never stored in .env.
 """
 
 import argparse
@@ -103,71 +117,264 @@ def _update_env(data_dir: str, updates: dict) -> None:
     with open(env_path, "w") as f:
         f.writelines(new_lines)
 
-
 def _detect_pg_windows() -> dict:
     """
     Detect PostgreSQL installation on Windows.
-    Returns dict with: installed (bool), version (str|None), port (int), service_name (str|None).
+
+    Scans ALL installed PostgreSQL instances (any version) from the registry
+    and returns the single best candidate, prioritised as:
+      1. PostgreSQL 16 (matches what POPMYC POS installs)
+      2. Highest version number among other installs
+      3. Fallback: directory/PATH detection
+
+    Returns dict with:
+      installed    (bool)
+      version      (str|None)   — e.g. "16.4"
+      major        (int|None)   — e.g. 16
+      port         (int)
+      service_name (str|None)
+      all_instances (list[dict]) — every detected instance
     """
-    import winreg
     import subprocess
 
-    result = {"installed": False, "version": None, "port": 5432, "service_name": None}
+    result = {
+        "installed":     False,
+        "version":       None,
+        "major":         None,
+        "port":          5432,
+        "service_name":  None,
+        "all_instances": [],
+    }
 
-    # Method 1: Registry scan
-    reg_paths = [
-        r"SOFTWARE\PostgreSQL\Installations",
-        r"SOFTWARE\WOW6432Node\PostgreSQL\Installations",
-        r"SOFTWARE\PostgreSQL Global Development Group\PostgreSQL",
-    ]
-    for reg_path in reg_paths:
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path)
-            result["installed"] = True
+    instances: list[dict] = []
+
+    # ── Method 1: Registry — enumerate ALL PostgreSQL installation keys ────────
+    try:
+        import winreg
+
+        reg_roots = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\PostgreSQL\Installations"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\PostgreSQL\Installations"),
+        ]
+        for hive, reg_path in reg_roots:
             try:
-                # Try to read version from first subkey
-                first_sub = winreg.EnumKey(key, 0)
-                sub_key = winreg.OpenKey(key, first_sub)
+                key = winreg.OpenKey(hive, reg_path)
+            except Exception:
+                continue
+            idx = 0
+            while True:
                 try:
-                    ver, _ = winreg.QueryValueEx(sub_key, "Version")
-                    result["version"] = str(ver)
+                    sub_name = winreg.EnumKey(key, idx)
+                    idx += 1
+                    try:
+                        sub_key = winreg.OpenKey(key, sub_name)
+                        inst: dict = {"version": None, "major": None,
+                                      "port": 5432, "service_name": None,
+                                      "base_dir": None}
+                        try:
+                            v, _ = winreg.QueryValueEx(sub_key, "Version")
+                            inst["version"] = str(v)
+                            try:
+                                inst["major"] = int(str(v).split(".")[0])
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                        try:
+                            p, _ = winreg.QueryValueEx(sub_key, "Port")
+                            inst["port"] = int(p)
+                        except Exception:
+                            pass
+                        try:
+                            s, _ = winreg.QueryValueEx(sub_key, "ServiceName")
+                            inst["service_name"] = str(s)
+                        except Exception:
+                            pass
+                        try:
+                            bd, _ = winreg.QueryValueEx(sub_key, "Base Directory")
+                            inst["base_dir"] = str(bd)
+                        except Exception:
+                            pass
+                        instances.append(inst)
+                    except Exception:
+                        pass
+                except OSError:
+                    break   # no more subkeys
+
+        # Also check the older "Global Development Group" key (single install)
+        for hive, reg_path in [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\PostgreSQL Global Development Group\PostgreSQL"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\PostgreSQL Global Development Group\PostgreSQL"),
+        ]:
+            try:
+                key = winreg.OpenKey(hive, reg_path)
+                sub_name = winreg.EnumKey(key, 0)
+                sub_key  = winreg.OpenKey(key, sub_name)
+                inst = {"version": None, "major": None, "port": 5432,
+                        "service_name": None, "base_dir": None}
+                try:
+                    v, _ = winreg.QueryValueEx(sub_key, "Version")
+                    inst["version"] = str(v)
+                    try:
+                        inst["major"] = int(str(v).split(".")[0])
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 try:
-                    port_val, _ = winreg.QueryValueEx(sub_key, "Port")
-                    result["port"] = int(port_val)
+                    p, _ = winreg.QueryValueEx(sub_key, "Port")
+                    inst["port"] = int(p)
                 except Exception:
                     pass
                 try:
-                    svc, _ = winreg.QueryValueEx(sub_key, "ServiceName")
-                    result["service_name"] = svc
+                    s, _ = winreg.QueryValueEx(sub_key, "ServiceName")
+                    inst["service_name"] = str(s)
                 except Exception:
                     pass
+                # Only add if not already captured
+                if not any(i.get("version") == inst.get("version") for i in instances):
+                    instances.append(inst)
             except Exception:
                 pass
-            break
-        except Exception:
-            continue
 
-    # Method 2: Scan common install paths
-    if not result["installed"]:
-        for root in ["C:\\Program Files\\PostgreSQL", "C:\\Program Files (x86)\\PostgreSQL"]:
-            if os.path.isdir(root):
-                result["installed"] = True
-                break
+    except ImportError:
+        pass    # winreg not available (non-Windows dev environment)
 
-    # Method 3: Check for psql in PATH
-    if not result["installed"]:
+    # ── Method 2: Scan common install directories ─────────────────────────────
+    if not instances:
+        for pg_root in ["C:\\Program Files\\PostgreSQL",
+                        "C:\\Program Files (x86)\\PostgreSQL"]:
+            if os.path.isdir(pg_root):
+                try:
+                    for ver_dir in os.listdir(pg_root):
+                        full = os.path.join(pg_root, ver_dir)
+                        if os.path.isdir(full):
+                            try:
+                                major = int(ver_dir)
+                                instances.append({
+                                    "version":      ver_dir,
+                                    "major":        major,
+                                    "port":         5432,
+                                    "service_name": f"postgresql-x64-{ver_dir}",
+                                    "base_dir":     full,
+                                })
+                            except ValueError:
+                                pass
+                except Exception:
+                    pass
+
+    # ── Method 2b: Dedicated POPMYC installation directory ───────────────────
+    # The POPMYC installer puts PostgreSQL in a separate prefix so that the
+    # standard C:\Program Files\PostgreSQL path is never touched.
+    # Detect it by checking the POPMYC-specific service key OR directory.
+    _popmyc_svc   = "POPMYCPostgreSQL16"
+    _popmyc_dir   = "C:\\Program Files\\POPMYC\\PostgreSQL\\16"
+    _popmyc_found = any(i.get("service_name") == _popmyc_svc for i in instances)
+    if not _popmyc_found:
         try:
-            r = subprocess.run(["psql", "--version"], capture_output=True, text=True, timeout=5)
+            import winreg
+            winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                f"SYSTEM\\CurrentControlSet\\Services\\{_popmyc_svc}",
+            )
+            # Service key exists — read port from PostgreSQL Installations registry
+            # (EDB registers the service there regardless of custom prefix/service name).
+            _port = 5432
+            try:
+                for hive, rp in [
+                    (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\PostgreSQL\\Installations"),
+                    (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\PostgreSQL\\Installations"),
+                ]:
+                    try:
+                        k = winreg.OpenKey(hive, rp)
+                        i = 0
+                        while True:
+                            try:
+                                sub = winreg.EnumKey(k, i); i += 1
+                                sk = winreg.OpenKey(k, sub)
+                                try:
+                                    sv, _ = winreg.QueryValueEx(sk, "ServiceName")
+                                    if sv == _popmyc_svc:
+                                        try:
+                                            pv, _ = winreg.QueryValueEx(sk, "Port")
+                                            _port = int(pv)
+                                        except Exception:
+                                            pass
+                                        break
+                                except Exception:
+                                    pass
+                            except OSError:
+                                break
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            instances.append({
+                "version":      "16",
+                "major":        16,
+                "port":         _port,
+                "service_name": _popmyc_svc,
+                "base_dir":     _popmyc_dir,
+            })
+        except Exception:
+            # Service key doesn't exist — check directory as last resort
+            if os.path.isdir(_popmyc_dir):
+                instances.append({
+                    "version":      "16",
+                    "major":        16,
+                    "port":         5432,
+                    "service_name": _popmyc_svc,
+                    "base_dir":     _popmyc_dir,
+                })
+
+    # ── Method 3: psql in PATH ────────────────────────────────────────────────
+    if not instances:
+        try:
+            r = subprocess.run(
+                ["psql", "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
             if r.returncode == 0:
-                result["installed"] = True
-                # e.g. "psql (PostgreSQL) 14.2"
                 parts = r.stdout.strip().split()
-                if len(parts) >= 3:
-                    result["version"] = parts[-1]
+                ver = parts[-1] if len(parts) >= 3 else None
+                major = None
+                try:
+                    major = int(ver.split(".")[0]) if ver else None
+                except Exception:
+                    pass
+                instances.append({
+                    "version": ver, "major": major,
+                    "port": 5432, "service_name": None, "base_dir": None,
+                })
         except Exception:
             pass
+
+    if not instances:
+        return result   # Nothing found
+
+    # ── Select best candidate ─────────────────────────────────────────────────
+    # Priority 1: dedicated POPMYC instance (POPMYCPostgreSQL16) — always wins
+    #             when present; it means a successful POPMYC-managed install.
+    # Priority 2: PG 16 (our target version for a third-party install).
+    # Priority 3: highest major version number.
+    # Priority 4: first found.
+    POPMYC_SVC = "POPMYCPostgreSQL16"
+
+    def _sort_key(inst: dict) -> tuple:
+        major = inst.get("major") or 0
+        is_popmyc = 1 if inst.get("service_name") == POPMYC_SVC else 0
+        is_16     = 1 if major == 16 else 0
+        return (is_popmyc, is_16, major)
+
+    instances.sort(key=_sort_key, reverse=True)
+    best = instances[0]
+
+    result["installed"]     = True
+    result["version"]       = best.get("version")
+    result["major"]         = best.get("major")
+    result["port"]          = best.get("port") or 5432
+    result["service_name"]  = best.get("service_name")
+    result["all_instances"] = instances
 
     return result
 
@@ -191,6 +398,70 @@ def _is_pg_service_running(service_name: str | None = None) -> bool:
                 return True
         except Exception:
             continue
+    return False
+
+
+def _start_pg_service(service_name: str | None) -> bool:
+    """
+    Attempt to start a PostgreSQL Windows service.
+    Returns True if the service is running after the attempt.
+    """
+    import subprocess
+    services_to_try = []
+    if service_name:
+        services_to_try.append(service_name)
+    services_to_try += ["postgresql-x64-16", "postgresql-x64-15",
+                         "postgresql-x64-14", "postgresql-x64-13",
+                         "postgresql-x64-12", "postgresql"]
+    for svc in services_to_try:
+        try:
+            subprocess.run(["sc", "start", svc],
+                           capture_output=True, text=True, timeout=10)
+        except Exception:
+            pass
+    # Give it a few seconds then check
+    import time
+    time.sleep(3)
+    return _is_pg_service_running(service_name)
+
+
+def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Return True if something is listening on host:port."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except (OSError, ConnectionRefusedError):
+        return False
+
+
+def _find_free_port(preferred: int = 5432, alternates: tuple = (5433, 5434, 5435, 5436)) -> int | None:
+    """
+    Return the first free TCP port from the candidates.
+    Returns None if all candidates are in use.
+    """
+    for port in (preferred,) + alternates:
+        if not _is_port_in_use(port):
+            return port
+    return None
+
+
+def _wait_pg_ready(host: str, port: int,
+                   timeout_s: int = 60, interval_s: float = 2.0) -> bool:
+    """
+    Poll until PostgreSQL accepts a TCP connection on host:port,
+    or until timeout_s seconds have elapsed.
+
+    Returns True when the port is accepting connections.
+    Does NOT require credentials — only checks TCP reachability
+    so it is safe to call without a password.
+    """
+    import time
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _is_port_in_use(port, host):
+            return True
+        time.sleep(interval_s)
     return False
 
 
@@ -227,8 +498,19 @@ def _test_db_connection(host: str, port: int, dbname: str, user: str, password: 
 def _create_database(host: str, port: int, admin_user: str, admin_password: str,
                      db_name: str, app_user: str, app_password: str) -> tuple[bool, str]:
     """
-    Create the application database (if it doesn't exist).
-    NEVER drops or resets existing data.
+    Create the application database and dedicated application user.
+
+    Security design:
+      - admin_user (postgres superuser) is used ONLY here for provisioning.
+      - app_user (popmyc_app) gets only the privileges needed for normal operation.
+      - The postgres superuser password is NOT stored after this call returns.
+      - NEVER drops or resets existing databases or users.
+
+    Privileges granted to app_user on db_name:
+      - CONNECT on DATABASE
+      - All privileges on public schema objects (tables, sequences, functions)
+      - Default privileges for future tables/sequences created by migrations
+
     Returns (success: bool, message: str).
     """
     try:
@@ -244,35 +526,76 @@ def _create_database(host: str, port: int, admin_user: str, admin_password: str,
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
 
-        # Check if database already exists (never create if it does)
-        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
-        if cur.fetchone():
-            cur.close()
-            conn.close()
-            return True, "Database already exists — no changes made."
+        safe_db   = db_name.replace('"', '')
+        safe_user = app_user.replace('"', '') if app_user else ""
 
-        # Create the database
-        # Use a safe identifier (no injection possible — db_name validated below)
-        safe_db = db_name.replace('"', '')
-        cur.execute(f'CREATE DATABASE "{safe_db}"')
-
-        # Create/update application user (only if different from admin)
-        if app_user and app_user != admin_user:
-            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (app_user,))
+        # ── Step 1: Create the application user if it doesn't exist ──────────
+        if safe_user and safe_user != admin_user:
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (safe_user,))
             if not cur.fetchone():
-                # Create user — password is passed as parameter (safe)
                 cur.execute(
-                    f"CREATE USER \"{app_user.replace('\"', '')}\" WITH PASSWORD %s",
+                    f'CREATE USER "{safe_user}" WITH PASSWORD %s LOGIN',
                     (app_password,),
                 )
+
+        # ── Step 2: Create the database if it doesn't exist ──────────────────
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (safe_db,))
+        db_already_exists = bool(cur.fetchone())
+
+        if not db_already_exists:
+            cur.execute(f'CREATE DATABASE "{safe_db}"')
+
+        # ── Step 3: Grant database-level privileges ───────────────────────────
+        if safe_user and safe_user != admin_user:
+            # CONNECT + ability to use the database
             cur.execute(
-                f"GRANT ALL PRIVILEGES ON DATABASE \"{safe_db}\" "
-                f"TO \"{app_user.replace('\"', '')}\""
+                f'GRANT CONNECT ON DATABASE "{safe_db}" TO "{safe_user}"'
             )
 
         cur.close()
         conn.close()
-        return True, f"Database '{db_name}' created successfully."
+
+        # ── Step 4: Grant schema-level privileges inside the new database ─────
+        # Must connect to the target DB (not postgres) to set schema privileges.
+        if safe_user and safe_user != admin_user:
+            conn2 = psycopg2.connect(
+                host=host, port=port, dbname=safe_db,
+                user=admin_user, password=admin_password,
+                connect_timeout=10,
+            )
+            conn2.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur2 = conn2.cursor()
+
+            # Grant usage on public schema
+            cur2.execute(f'GRANT USAGE, CREATE ON SCHEMA public TO "{safe_user}"')
+
+            # Grant on all existing tables/sequences/functions
+            cur2.execute(
+                f'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "{safe_user}"'
+            )
+            cur2.execute(
+                f'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "{safe_user}"'
+            )
+            cur2.execute(
+                f'GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "{safe_user}"'
+            )
+
+            # Default privileges so future objects created by migrations are accessible
+            cur2.execute(
+                f'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
+                f'GRANT ALL ON TABLES TO "{safe_user}"'
+            )
+            cur2.execute(
+                f'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
+                f'GRANT ALL ON SEQUENCES TO "{safe_user}"'
+            )
+
+            cur2.close()
+            conn2.close()
+
+        if db_already_exists:
+            return True, "Database already exists — no changes made."
+        return True, f"Database '{db_name}' and user '{app_user}' created successfully."
 
     except Exception as exc:
         msg = str(exc).lower()
@@ -290,14 +613,16 @@ def action_check(data_dir: str) -> None:
     db_host = env.get("DB_HOST", "localhost")
     db_port = int(env.get("DB_PORT", "5432"))
     db_name = env.get("DB_NAME", "popmyc_pos")
-    db_user = env.get("DB_USER", "postgres")
+    # Default to popmyc_app — the dedicated application user, not postgres superuser.
+    db_user = env.get("DB_USER", "popmyc_app")
     db_pass = env.get("DB_PASSWORD", "")
 
     # Detect PostgreSQL installation
     try:
         pg = _detect_pg_windows()
     except Exception:
-        pg = {"installed": False, "version": None, "port": db_port, "service_name": None}
+        pg = {"installed": False, "version": None, "major": None,
+              "port": db_port, "service_name": None, "all_instances": []}
 
     if not pg["installed"]:
         _out({
@@ -311,29 +636,68 @@ def action_check(data_dir: str) -> None:
         })
         return
 
-    # Check service
-    pg_running = _is_pg_service_running(pg.get("service_name"))
+    # Use the port from the detected PG instance (may differ from .env if .env
+    # hasn't been written yet for this installation).
+    effective_port = pg["port"] if pg["port"] else db_port
 
-    if not pg_running:
+    # ── Zombie-running detection ───────────────────────────────────────────────
+    # A service may report STATE=RUNNING in the SCM but not actually accept
+    # TCP connections (corrupted install, port conflict, startup failure).
+    # We MUST TCP-test the port before trusting the service state, otherwise
+    # action_check will fall through to _test_db_connection which returns
+    # CONNECTION_REFUSED and prompts the customer for an admin password —
+    # even on a machine that just needs a fresh dedicated POPMYC PG install.
+    #
+    # Strategy:
+    #   1. Check SCM service state (fast, no network).
+    #   2. If "running", TCP-test the port (cheap socket connect, 2s timeout).
+    #   3. Only if both pass, attempt a full DB connection with credentials.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # Step 1: SCM service state
+    pg_svc_running = _is_pg_service_running(pg.get("service_name"))
+
+    if not pg_svc_running:
         _out({
             "success": False, "action": "check",
             "pg_installed": True, "pg_running": False,
             "db_exists": False, "db_accessible": False,
-            "pg_version": pg["version"], "pg_port": db_port,
+            "pg_version": pg["version"], "pg_port": effective_port,
             "message": "PostgreSQL is installed but the service is not running.",
             "error_code": "PG_NOT_RUNNING",
             "next_step": "start_pg",
         })
         return
 
-    # Test connection
-    ok, err = _test_db_connection(db_host, db_port, db_name, db_user, db_pass)
+    # Step 2: TCP port test — the service is "RUNNING" but is it actually
+    # accepting connections? (Handles zombie-running / startup-failed states.)
+    port_open = _is_port_in_use(effective_port, db_host)
+    if not port_open:
+        _out({
+            "success": False, "action": "check",
+            "pg_installed": True, "pg_running": False,
+            "db_exists": False, "db_accessible": False,
+            "pg_version": pg["version"], "pg_port": effective_port,
+            "message": (
+                f"PostgreSQL service is running but port {effective_port} is not "
+                f"accepting connections. The existing installation may be unusable."
+            ),
+            "error_code": "PG_NOT_RUNNING",
+            "next_step": "install_pg",
+        })
+        return
+
+    # pg_running is True only when both SCM state AND TCP port confirm readiness
+    pg_running = True
+
+    # Step 3: Full DB connection test using the effective port
+    ok, err = _test_db_connection(db_host, effective_port, db_name, db_user, db_pass)
     if ok:
         _out({
             "success": True, "action": "check",
             "pg_installed": True, "pg_running": True,
             "db_exists": True, "db_accessible": True,
-            "pg_version": pg["version"], "pg_port": db_port,
+            "pg_version": pg["version"], "pg_port": effective_port,
             "message": f"Database '{db_name}' is ready.",
             "error_code": None,
             "next_step": "done",
@@ -341,17 +705,24 @@ def action_check(data_dir: str) -> None:
         return
 
     if err == "DATABASE_NOT_FOUND":
+        # New deployment model: PostgreSQL is installed manually by the operator.
+        # Whenever the database doesn't exist, ask for the admin password so
+        # POPMYC can create popmyc_pos / popmyc_app automatically.
+        # next_step='enter_credentials' is ALWAYS correct here.
         _out({
             "success": False, "action": "check",
             "pg_installed": True, "pg_running": True,
             "db_exists": False, "db_accessible": False,
-            "pg_version": pg["version"], "pg_port": db_port,
-            "message": f"PostgreSQL is running but the database '{db_name}' does not exist.",
+            "pg_version": pg["version"], "pg_port": effective_port,
+            "message": (
+                f"PostgreSQL is running but the database '{db_name}' does not exist. "
+                f"Enter the PostgreSQL administrator password to create it."
+            ),
             "error_code": "DB_NOT_FOUND",
             "next_step": "enter_credentials",
             "db_name": db_name,
             "db_host": db_host,
-            "db_port": db_port,
+            "db_port": effective_port,
         })
         return
 
@@ -360,8 +731,12 @@ def action_check(data_dir: str) -> None:
             "success": False, "action": "check",
             "pg_installed": True, "pg_running": True,
             "db_exists": None, "db_accessible": False,
-            "pg_version": pg["version"], "pg_port": db_port,
-            "message": "PostgreSQL password is incorrect. Please update your database credentials.",
+            "pg_version": pg["version"], "pg_port": effective_port,
+            "message": (
+                "The POPMYC database credentials are incorrect. "
+                "Please check your configuration or enter the PostgreSQL "
+                "administrator password to reprovision."
+            ),
             "error_code": "AUTH_FAILED",
             "next_step": "enter_credentials",
         })
@@ -371,7 +746,7 @@ def action_check(data_dir: str) -> None:
         "success": False, "action": "check",
         "pg_installed": True, "pg_running": True,
         "db_exists": None, "db_accessible": False,
-        "pg_version": pg["version"], "pg_port": db_port,
+        "pg_version": pg["version"], "pg_port": effective_port,
         "message": f"Cannot connect to database: {err}",
         "error_code": "CONNECTION_ERROR",
         "next_step": "enter_credentials",
@@ -381,15 +756,60 @@ def action_check(data_dir: str) -> None:
 # ── Action: create ─────────────────────────────────────────────────────────────
 
 def action_create(data_dir: str, pg_admin_password: str) -> None:
+    """
+    Create the popmyc_pos database and the dedicated popmyc_app application user.
+
+    Credential design:
+      - pg_admin_password  = postgres superuser password (read from stdin, NEVER stored)
+      - app_password       = popmyc_app password (generated here if not in .env, stored)
+      - After this action, .env contains DB_USER=popmyc_app and DB_PASSWORD=<app_password>
+      - The postgres superuser password is DISCARDED after this function returns.
+    """
+    import re
+    import secrets
+    import string
+
     env = _load_env(data_dir)
     db_host  = env.get("DB_HOST", "localhost")
-    db_port  = int(env.get("DB_PORT", "5432"))
     db_name  = env.get("DB_NAME", "popmyc_pos")
-    db_user  = env.get("DB_USER", "postgres")
-    db_pass  = env.get("DB_PASSWORD", pg_admin_password)
+
+    # Use the port from the .env if already written; otherwise detect from PG.
+    # This ensures we talk to the right PG instance on non-default ports.
+    env_port = env.get("DB_PORT", "")
+    if env_port:
+        db_port = int(env_port)
+    else:
+        try:
+            pg = _detect_pg_windows()
+            db_port = pg["port"] if pg.get("port") else 5432
+        except Exception:
+            db_port = 5432
+
+    # Always use the dedicated application user — never the superuser.
+    app_user = "popmyc_app"
+
+    # Use the app-user password from .env if already set; otherwise generate one.
+    # This ensures idempotency: re-running create with the same .env is safe.
+    app_password = env.get("DB_PASSWORD", "")
+    if not app_password or app_password in ("changeme", "postgres"):
+        # Generate a cryptographically secure password meeting Windows complexity:
+        # uppercase + lowercase + digits + symbol, minimum 20 chars.
+        alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
+        symbols  = "!@#$%^&*"
+        # Guarantee at least one of each required class
+        pwd = (
+            secrets.choice(string.ascii_uppercase) +
+            secrets.choice(string.ascii_lowercase) +
+            secrets.choice(string.digits) +
+            secrets.choice(symbols) +
+            "".join(secrets.choice(alphabet + symbols) for _ in range(16))
+        )
+        # Shuffle so the guaranteed characters aren't always at the front
+        pwd_list = list(pwd)
+        secrets.SystemRandom().shuffle(pwd_list)
+        app_password = "".join(pwd_list)
 
     # Validate db_name (only alphanumeric + underscore)
-    import re
     if not re.match(r'^[a-zA-Z0-9_]+$', db_name):
         _out({
             "success": False, "action": "create",
@@ -402,15 +822,18 @@ def action_create(data_dir: str, pg_admin_password: str) -> None:
         host=db_host, port=db_port,
         admin_user="postgres", admin_password=pg_admin_password,
         db_name=db_name,
-        app_user=db_user, app_password=db_pass,
+        app_user=app_user, app_password=app_password,
     )
 
     if ok:
-        # Update the .env with the confirmed credentials
+        # Persist ONLY the application-user credentials.
+        # The postgres superuser password is intentionally NOT stored.
         _update_env(data_dir, {
-            "DB_PASSWORD": db_pass,
-            "DB_PORT": str(db_port),
-            "DB_HOST": db_host,
+            "DB_USER":     app_user,
+            "DB_PASSWORD": app_password,
+            "DB_PORT":     str(db_port),
+            "DB_HOST":     db_host,
+            "DB_NAME":     db_name,
         })
         _out({
             "success": True, "action": "create",
@@ -437,15 +860,36 @@ def main() -> None:
     parser.add_argument("--data-dir",    required=True)
     # --pg-password is intentionally NOT accepted as a CLI argument to prevent
     # the password appearing in the Windows process list (Task Manager, etc.).
-    # For the 'create' action the password is read from stdin (one line).
+    # For the 'create' action the password is read from stdin (one line),
+    # OR from a file specified via --password-file (file path in argv, never
+    # the password itself). The caller is responsible for deleting the file.
+    parser.add_argument("--password-file", default=None,
+                        help="Path to a file whose first line is the PG admin password. "
+                             "Used by the Inno Setup installer to avoid cmd.exe pipe quoting issues.")
     args = parser.parse_args()
 
     try:
         if args.action == "check":
             action_check(args.data_dir)
         elif args.action == "create":
-            # Read password from stdin — never from argv
-            pg_password = sys.stdin.readline().rstrip("\n")
+            if args.password_file:
+                # Read from file — avoids cmd.exe "type file | python" quoting fragility.
+                # The file path is in argv (safe); the password content is not.
+                try:
+                    with open(args.password_file, "r") as pf:
+                        pg_password = pf.readline().rstrip("\n")
+                except Exception as exc:
+                    _out({
+                        "success": False,
+                        "action": "create",
+                        "message": "Could not read password file.",
+                        "error_code": "PASSWORD_FILE_ERROR",
+                    })
+                    print(f"[pg_setup] password-file error: {exc}", file=sys.stderr)
+                    return
+            else:
+                # Read password from stdin — never from argv
+                pg_password = sys.stdin.readline().rstrip("\n")
             action_create(args.data_dir, pg_password)
     except Exception as exc:
         # Catch-all: never expose a traceback to the customer

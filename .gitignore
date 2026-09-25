@@ -81,3 +81,5 @@ test_write.txt
 # Bundled desktop runtime / binaries
 desktop/runtime/
 desktop/resources/nssm/*.exe
+# PostgreSQL installer — downloaded at build time (~300 MB), never committed
+desktop/pg-installer/

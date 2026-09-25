@@ -43,12 +43,23 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 # ---------------------------------------------------------------------------
 # Persistent data directory
 # ---------------------------------------------------------------------------
-# The launcher sets POPMYC_DATA_DIR to the user's data folder, e.g.
-#   Windows: C:\Users\<name>\AppData\Roaming\POPMYC POS\
-# Falling back to BASE_DIR keeps things working for developers who run
-# settings_desktop.py directly without the launcher.
+# The launcher sets POPMYC_DATA_DIR to the shared machine-wide data folder:
+#   C:\ProgramData\POPMYC POS
+# This is the same directory the Windows service (LocalSystem) and the
+# Electron desktop process (logged-in operator) use — both can read/write it.
+#
+# Fallback cascade (mirrors service_launcher.py resolve_data_dir()):
+#   1. POPMYC_DATA_DIR env var  — explicit override
+#   2. %PROGRAMDATA%\POPMYC POS — machine-wide (production default)
+#   3. BASE_DIR/desktop_data    — developer fallback when no env is set
 
-_DATA_DIR = Path(os.environ.get("POPMYC_DATA_DIR", str(BASE_DIR / "desktop_data")))  # noqa: F405
+import os as _os
+_programdata = _os.environ.get("PROGRAMDATA") or _os.environ.get("ProgramData")
+_DATA_DIR = Path(
+    _os.environ.get("POPMYC_DATA_DIR")
+    or (_programdata + "\\POPMYC POS" if _programdata else "")
+    or str(BASE_DIR / "desktop_data")  # noqa: F405
+)
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_ROOT = _DATA_DIR / "media"

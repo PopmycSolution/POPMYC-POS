@@ -28,6 +28,7 @@ const { execFile }  = require('child_process');
 const path          = require('path');
 const fs            = require('fs');
 const http          = require('http');
+const os            = require('os');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -182,14 +183,31 @@ function probeHealth(timeoutMs = 3000) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Resolve the machine-wide POPMYC data directory.
+ * Uses %PROGRAMDATA%\POPMYC POS so the Windows service (running as
+ * LocalSystem) and the Electron desktop process (running as the logged-in
+ * operator) both see the same .env and log files.
+ * Falls back to POPMYC_DATA_DIR env var if explicitly set (dev/override).
+ */
+function getDefaultDataDir() {
+  if (process.env.POPMYC_DATA_DIR) return process.env.POPMYC_DATA_DIR;
+  if (process.env.PROGRAMDATA) return path.join(process.env.PROGRAMDATA, 'POPMYC POS');
+  // Non-Windows / dev fallback — should never reach here in production
+  return path.join(os.homedir ? os.homedir() : process.env.USERPROFILE || '.', 'POPMYC POS');
+}
+
+/**
  * Install and configure the POPMYCBackend Windows service via NSSM.
  *
  * @param {object} opts
  * @param {string} opts.appDir      - Application install directory (e.g. C:\Program Files\POPMYC POS)
- * @param {string} opts.dataDir     - Persistent data directory (e.g. %APPDATA%\POPMYC POS)
+ * @param {string} [opts.dataDir]   - Persistent data directory. Defaults to %PROGRAMDATA%\POPMYC POS.
  * @returns {Promise<{ok: boolean, message: string}>}
  */
 async function installService({ appDir, dataDir }) {
+  // Default to the machine-wide ProgramData directory so the LocalSystem
+  // service can read the .env regardless of which user account is logged in.
+  if (!dataDir) dataDir = getDefaultDataDir();
   const nssmPath = getNssmPath(appDir);
   if (!nssmPath) {
     return { ok: false, message: 'nssm.exe not found. Cannot install service.' };
@@ -216,15 +234,39 @@ async function installService({ appDir, dataDir }) {
   }
 
   // ── Install ──────────────────────────────────────────────────────────────
+  // Pass only Application to `nssm install` — the script path and port are
+  // set via AppParameters separately.  This is critical for paths containing
+  // spaces (e.g. "C:\Program Files (x86)\POPMYC POS\..."):
+  //
+  //   nssm install POPMYCBackend "C:\...\python.exe"
+  //     → sets Application only; AppParameters defaults to empty
+  //
+  //   nssm set POPMYCBackend AppParameters "\"C:\...\service_launcher.py\" --port 8000"
+  //     → stores the entire quoted path as one Windows token so Python
+  //       receives it as a single argv[0] regardless of spaces in the path.
+  //
+  // If we pass launcherPath as a positional arg to `nssm install`, NSSM stores
+  // it in AppParameters WITHOUT quotes, and Windows later splits it on spaces,
+  // causing Python to receive only "C:\Program" as the script path.
   const installResult = await nssmExec(nssmPath, [
     'install', SERVICE_NAME, pythonPath,
-    launcherPath, '--port', String(BACKEND_PORT),
   ]);
   if (installResult.code !== 0) {
     return {
       ok: false,
       message: `NSSM install failed (${installResult.code}): ${installResult.stderr || installResult.stdout}`,
     };
+  }
+
+  // Set AppParameters with the launcher path properly quoted.
+  // The outer string is the registry value; the inner \" sequences ensure
+  // the launcher path is passed as one token to Python's argv.
+  const appParams = `"${launcherPath}" --port ${String(BACKEND_PORT)}`;
+  const appParamsResult = await nssmExec(nssmPath, [
+    'set', SERVICE_NAME, 'AppParameters', appParams,
+  ]);
+  if (appParamsResult.code !== 0) {
+    console.warn(`[ServiceManager] nssm set AppParameters returned ${appParamsResult.code}: ${appParamsResult.stderr}`);
   }
 
   // ── Configure service properties via nssm set ────────────────────────────

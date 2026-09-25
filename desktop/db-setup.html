@@ -161,11 +161,51 @@
     <ol class="steps">
       <li>Click <strong>Download PostgreSQL</strong> below to open the official installer.</li>
       <li>Download <strong>PostgreSQL 16</strong> Windows x86-64 installer.</li>
-      <li>Run the installer — use default settings and remember the password.</li>
+      <li>Run the installer — use default settings and remember the password you set.</li>
       <li>Come back here and click <strong>Check Again</strong>.</li>
     </ol>
     <button class="btn btn-download" onclick="openDownload()">⬇ Download PostgreSQL</button>
     <button class="btn btn-secondary" onclick="retryCheck()">🔄 Check Again</button>
+  </div>
+
+  <!-- ── Screen: POPMYC Setting Up (install_pg next_step) ──────────── -->
+  <!-- Shown when POPMYC's own PostgreSQL service is detected but not   -->
+  <!-- yet accepting connections. No action needed from the customer —  -->
+  <!-- just wait. Auto-retries every 5 seconds.                         -->
+  <div id="screen-popmyc-setup" class="screen">
+    <div class="status-row info">
+      <span class="icon">⏳</span>
+      <div class="body">
+        <p>POPMYC is preparing the database…</p>
+        <small>The database service is starting up. This usually takes less than 30 seconds. Please wait.</small>
+      </div>
+    </div>
+    <div style="text-align:center;padding:12px 0 4px;">
+      <div class="spinner dark" style="display:inline-block;width:24px;height:24px;border-width:3px;"></div>
+    </div>
+    <button class="btn btn-secondary" style="margin-top:16px;" onclick="retryCheck()">🔄 Check Again</button>
+  </div>
+
+  <!-- ── Screen: Contact Support ────────────────────────────────────── -->
+  <!-- Shown when the .env has popmyc_app credentials but the DB is     -->
+  <!-- still unreachable — something went wrong with provisioning.      -->
+  <!-- The customer does NOT enter a password here.                     -->
+  <div id="screen-contact-support" class="screen">
+    <div class="status-row error">
+      <span class="icon">❌</span>
+      <div class="body">
+        <p id="support-title">Database configuration error</p>
+        <small id="support-detail">The POPMYC database could not be reached. Please reinstall POPMYC POS or contact support.</small>
+      </div>
+    </div>
+    <div class="status-row info" style="margin-top:0;">
+      <span class="icon">📧</span>
+      <div class="body">
+        <p>Contact POPMYC support</p>
+        <small>popmychubsolution@gmail.com &nbsp;|&nbsp; 0256251295 / 0598610304</small>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="retryCheck()">🔄 Try Again</button>
   </div>
 
   <!-- ── Screen: PG Not Running ─────────────────────────────────────── -->
@@ -255,13 +295,15 @@ function getDesktop() { return window.popmycDesktop || null; }
 
 // ── Screen management ─────────────────────────────────────────────────────────
 const TITLES = {
-  'screen-checking':  'Database Setup',
-  'screen-no-pg':     'PostgreSQL Required',
-  'screen-pg-stopped':'PostgreSQL Stopped',
-  'screen-password':  'Create Database',
-  'screen-creating':  'Creating Database…',
-  'screen-done':      'Database Ready',
-  'screen-error':     'Setup Error',
+  'screen-checking':       'Database Setup',
+  'screen-no-pg':          'PostgreSQL Required',
+  'screen-popmyc-setup':   'Setting Up Database…',
+  'screen-pg-stopped':     'PostgreSQL Stopped',
+  'screen-password':       'Create Database',
+  'screen-creating':       'Creating Database…',
+  'screen-done':           'Database Ready',
+  'screen-error':          'Setup Error',
+  'screen-contact-support':'Contact Support',
 };
 
 function showScreen(id) {
@@ -279,6 +321,9 @@ function handlePgResult(result) {
     return;
   }
   if (!result.pg_running) {
+    // PostgreSQL is installed but not running (or not accepting connections).
+    // In the manual-deployment model, the operator is responsible for ensuring
+    // PostgreSQL is running. Show instructions to start it.
     showScreen('screen-pg-stopped');
     return;
   }
@@ -286,7 +331,10 @@ function handlePgResult(result) {
     markDone();
     return;
   }
-  // DB missing or auth issue — ask for password
+  // PostgreSQL is running but the POPMYC database/user hasn't been provisioned
+  // yet — or credentials are wrong. Show the administrator password screen.
+  // The operator enters the postgres admin password once; POPMYC creates
+  // popmyc_pos / popmyc_app automatically.
   showScreen('screen-password');
   const statusBody = document.getElementById('pw-status-body');
   if (!statusBody) return;
@@ -295,10 +343,17 @@ function handlePgResult(result) {
     statusBody.innerHTML = '<p>Incorrect password</p><small>The password you entered was incorrect. Please try again.</small>';
   } else if (code === 'DB_NOT_FOUND') {
     const dbName = result.db_name || 'popmyc_pos';
-    statusBody.innerHTML = '<p>Create POPMYC database</p><small>PostgreSQL is running but the database <strong>' + dbName + '</strong> doesn\'t exist yet. Enter the PostgreSQL admin password to create it.</small>';
+    statusBody.innerHTML = '<p>Create POPMYC database</p><small>PostgreSQL is running but the database <strong>' + dbName + '</strong> doesn\'t exist yet. Enter the PostgreSQL administrator password to create it automatically.</small>';
   } else {
     statusBody.innerHTML = '<p>Database connection failed</p><small>' + (result.message || 'Cannot connect to PostgreSQL.') + '</small>';
   }
+}
+
+// Auto-retry helper — retained for potential future use but not called
+// in the manual-PostgreSQL deployment model.
+let _autoRetryTimer = null;
+function scheduleAutoRetry() {
+  // Not used in manual-deployment model.
 }
 
 async function retryCheck() {

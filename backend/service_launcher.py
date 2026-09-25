@@ -29,10 +29,10 @@ Startup sequence:
 
 Logging:
   - Stdout/stderr are captured by NSSM and written to:
-      %APPDATA%\\POPMYC POS\\logs\\service_stdout.log
-      %APPDATA%\\POPMYC POS\\logs\\service_stderr.log
+      C:\\ProgramData\\POPMYC POS\\logs\\service_stdout.log
+      C:\\ProgramData\\POPMYC POS\\logs\\service_stderr.log
   - Django application logs go to:
-      %APPDATA%\\POPMYC POS\\logs\\popmyc_desktop.log
+      C:\\ProgramData\\POPMYC POS\\logs\\popmyc_desktop.log
   - All log files are rotated at 10 MB by NSSM (stdout/stderr) or
     by Django's RotatingFileHandler (application log).
 
@@ -87,16 +87,31 @@ def fatal(msg: str, code: int = 1) -> None:
 def resolve_data_dir() -> Path:
     """
     Determine the persistent data directory in priority order:
-      1. POPMYC_DATA_DIR environment variable
-      2. %APPDATA%\\POPMYC POS  (Windows)
-      3. ~/.popmyc-pos           (fallback for non-Windows dev)
+      1. POPMYC_DATA_DIR environment variable (set by NSSM AppEnvironmentExtra)
+      2. %PROGRAMDATA%\\POPMYC POS  (C:\\ProgramData\\POPMYC POS)
+         Preferred for production: machine-wide, accessible to LocalSystem
+         service AND every logged-in operator regardless of which user account
+         the service runs under.  Always readable/writable by LocalSystem.
+      3. %APPDATA%\\POPMYC POS  (Windows per-user fallback — dev/legacy)
+      4. ~/.popmyc-pos           (non-Windows dev fallback)
     """
     if os.environ.get("POPMYC_DATA_DIR"):
-        return Path(os.environ["POPMYC_DATA_DIR"])
+        p = Path(os.environ["POPMYC_DATA_DIR"])
+        log(f"Data dir (from POPMYC_DATA_DIR env): {p}")
+        return p
+    programdata = os.environ.get("PROGRAMDATA")
+    if programdata:
+        p = Path(programdata) / "POPMYC POS"
+        log(f"Data dir (from PROGRAMDATA): {p}")
+        return p
     appdata = os.environ.get("APPDATA")
     if appdata:
-        return Path(appdata) / "POPMYC POS"
-    return Path.home() / ".popmyc-pos"
+        p = Path(appdata) / "POPMYC POS"
+        log(f"Data dir (from APPDATA fallback): {p}")
+        return p
+    p = Path.home() / ".popmyc-pos"
+    log(f"Data dir (home fallback): {p}")
+    return p
 
 
 def ensure_data_dirs(data_dir: Path) -> None:
@@ -340,6 +355,25 @@ def main() -> None:
     # Propagate data dir into environment so settings_desktop.py picks it up
     os.environ.setdefault("POPMYC_DATA_DIR", str(data_dir))
     os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings_desktop"
+
+    # ── Diagnostic: log resolved DB config (never log password) ──────────────
+    log(f"DB host    : {os.environ.get('DB_HOST', 'localhost')}")
+    log(f"DB port    : {os.environ.get('DB_PORT', '5432')}")
+    log(f"DB name    : {os.environ.get('DB_NAME', 'popmyc_pos')}")
+    log(f"DB user    : {os.environ.get('DB_USER', '(not set)')}")
+    log(f"Settings   : config.settings_desktop")
+
+    # Safety check: warn if the DB user is "postgres" — this is the developer/placeholder
+    # credential that should have been replaced by the setup flow with "popmyc_app".
+    # It is NOT a fatal error (allows recovery) but is logged prominently.
+    db_user = os.environ.get("DB_USER", "")
+    if db_user in ("postgres", "changeme", ""):
+        log(
+            "WARNING: DB_USER is set to a placeholder/developer value "
+            f"('{db_user}'). This typically means the Database Setup screen "
+            "has not been completed. The backend may fail to connect to popmyc_pos. "
+            "Please run POPMYC POS and complete the Database Setup."
+        )
 
     # ── sys.path — ensure backend dir is importable ──────────────────────────
     backend_dir = Path(__file__).resolve().parent

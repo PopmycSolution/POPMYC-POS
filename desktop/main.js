@@ -75,8 +75,27 @@ function getPythonHome() {
 }
 
 function getDataDir() {
+  // Priority 1: explicit override (set by NSSM or dev environment)
   if (process.env.POPMYC_DATA_DIR) return process.env.POPMYC_DATA_DIR;
-  return path.join(app.getPath('appData'), 'POPMYC POS');
+  // Priority 2: machine-wide ProgramData — accessible to the LocalSystem
+  // Windows service AND every operator regardless of which user account they
+  // are logged in as. This is the production default.
+  //
+  // Use process.env.PROGRAMDATA when available; fall back to the Windows
+  // default 'C:\\ProgramData' rather than to app.getPath('appData').
+  // app.getPath('appData') is per-user (APPDATA) — if it were used, the
+  // Electron process would write .env to the interactive user's profile
+  // while the LocalSystem Windows service looks in ProgramData, causing
+  // the service to start without the DB credentials that Electron configured.
+  //
+  // 'C:\\ProgramData' is the Windows-specified default for PROGRAMDATA and
+  // is correct on all standard Windows installations. Non-Windows dev
+  // environments (where neither POPMYC_DATA_DIR nor a Windows-like
+  // PROGRAMDATA is set) can override via POPMYC_DATA_DIR.
+  const programData = process.env.PROGRAMDATA
+    || process.env.ProgramData          // alternate casing (rare)
+    || 'C:\\ProgramData';               // Windows default — never per-user
+  return path.join(programData, 'POPMYC POS');
 }
 
 function ensureDataDir() {
@@ -137,7 +156,7 @@ function ensureDesktopEnv(dataDir) {
         '  media/   — Uploaded files',
         '  backups/ — Database backups',
         '',
-        'Support: popmycsolution@gmail.com | 0256251295 / 0598610304',
+        'Support: popmychubsolution@gmail.com | 0256251295 / 0598610304',
       ].join('\n'), 'utf8');
     }
   }

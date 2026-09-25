@@ -78,6 +78,69 @@ if (!fs.existsSync(NSSM_SRC)) {
 }
 ok('nssm.exe: ' + NSSM_SRC);
 
+// ── 3c. Verify no developer data artifacts will contaminate the build ──────────
+// The backend extraResources excludes .env, media, backups, logs, and desktop_data
+// via package.json filters. This step does a final sanity-check to catch any case
+// where developer data might have leaked into the source tree in an unexpected place.
+console.log('\n🔍  Checking for developer data artifacts...');
+const BACKEND_SRC = path.join(ROOT, '..', 'backend');
+const devDataChecks = [
+  { path: path.join(BACKEND_SRC, '.env'),          label: 'backend/.env (dev credentials)' },
+  { path: path.join(BACKEND_SRC, 'desktop_data'),  label: 'backend/desktop_data/ (dev data dir)' },
+  { path: path.join(BACKEND_SRC, 'media'),         label: 'backend/media/ (dev uploaded files)' },
+  { path: path.join(BACKEND_SRC, 'backups'),       label: 'backend/backups/ (dev DB backups)' },
+];
+// Check for any .sql, .dump, .sqlite3 in backend tree (not inside .venv)
+const { execSync: _execSync } = require('child_process');
+const dangerExts = ['.sqlite3', '.db', '.sql', '.dump', '.pgdump', '.backup'];
+let dataFilesFound = [];
+for (const ext of dangerExts) {
+  try {
+    const result = _execSync(
+      `where /r "${BACKEND_SRC}" *${ext} 2>nul`,
+      { encoding: 'utf8', stdio: ['pipe','pipe','pipe'] }
+    ).split('\n').map(s => s.trim()).filter(s => s &&
+      !s.includes('.venv') && !s.includes('node_modules'));
+    dataFilesFound.push(...result);
+  } catch { /* not found = ok */ }
+}
+if (dataFilesFound.length > 0) {
+  console.warn('\n  ⚠️   WARNING: Potential developer database files found in backend source:');
+  dataFilesFound.forEach(f => console.warn('       ' + f));
+  console.warn('       These will NOT be packaged (excluded by filter) but should be removed');
+  console.warn('       from the source tree before distributing. Add them to .gitignore.\n');
+}
+// Check .env — excluded but warn so developer is aware
+const backendEnv = path.join(BACKEND_SRC, '.env');
+if (fs.existsSync(backendEnv)) {
+  console.warn('  ⚠️   NOTICE: backend/.env exists with developer credentials.');
+  console.warn('       It is excluded from packaging by the extraResources filter.');
+  console.warn('       Confirm it is in .gitignore and NOT committed to source control.\n');
+}
+ok('Developer data artifact check complete.');
+
+// ── 3b. Verify PostgreSQL installer — REQUIRED, hard fail if missing ──────────
+// The Inno Setup script bundles postgresql-16.4-1-windows-x64.exe directly.
+// Without it the customer installer will NOT automatically install PostgreSQL.
+// Run:  npm run download:pg   to download the official EDB installer (~356 MB).
+const PG_INSTALLER_FILENAME = 'postgresql-16.4-1-windows-x64.exe';
+const PG_INSTALLER_SRC = path.join(ROOT, 'pg-installer', PG_INSTALLER_FILENAME);
+console.log('\n🔍  Verifying PostgreSQL installer…');
+if (!fs.existsSync(PG_INSTALLER_SRC)) {
+  fail(
+    `PostgreSQL installer not found at:\n    ${PG_INSTALLER_SRC}\n\n` +
+    '    This file is REQUIRED to build an installer that can automatically\n' +
+    '    set up PostgreSQL on a customer machine.\n\n' +
+    '    Download it with:   npm run download:pg\n' +
+    '    Source: https://www.enterprisedb.com/downloads/postgres-postgresql-downloads\n' +
+    '    (Official EDB "postgresql-16-4-windows-x64.exe" — ~356 MB)\n\n' +
+    '    A build without this file would produce a deficient installer that\n' +
+    '    fails to install PostgreSQL. Build aborted.'
+  );
+}
+const pgSize = (fs.statSync(PG_INSTALLER_SRC).size / (1024 * 1024)).toFixed(0);
+ok(`${PG_INSTALLER_FILENAME}  (${pgSize} MB)`);
+
 // ── 4. Locate ISCC ────────────────────────────────────────────────────────────
 console.log('\n🔍  Locating Inno Setup compiler...');
 let ISCC = null;
