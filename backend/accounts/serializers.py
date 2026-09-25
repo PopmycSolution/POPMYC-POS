@@ -67,25 +67,44 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
+    # Accept username, email, or phone_number — any one is sufficient.
+    # 'identifier' is also accepted as a catch-all field name from the frontend.
+    username     = serializers.CharField(required=False, allow_blank=True)
+    identifier   = serializers.CharField(required=False, allow_blank=True)   # generic fallback
     phone_number = serializers.CharField(required=False, allow_blank=True)
-    email = serializers.EmailField(required=False, allow_blank=True)
-    password = serializers.CharField(write_only=True)
+    email        = serializers.CharField(required=False, allow_blank=True)   # CharField, not EmailField
+    password     = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        phone_number = data.get("phone_number", "")
-        email = data.get("email", "")
-        password = data.get("password", "")
+        username     = (data.get("username",     "") or "").strip()
+        identifier   = (data.get("identifier",   "") or "").strip()
+        phone_number = (data.get("phone_number", "") or "").strip()
+        email        = (data.get("email",        "") or "").strip()
+        password     = data.get("password", "")
+
+        # 'identifier' and 'email' are interchangeable generic fields —
+        # prefer whichever the frontend sends (email is the legacy key).
+        lookup = username or identifier or email
 
         user = None
-        if phone_number:
+
+        # ── 1. Direct username authenticate ───────────────────────────────────
+        if lookup and not user:
+            user = authenticate(username=lookup, password=password)
+
+        # ── 2. Email lookup → username authenticate ───────────────────────────
+        if lookup and not user:
             try:
-                user_obj = CustomUser.objects.get(phone_number=phone_number)
+                user_obj = CustomUser.objects.get(email=lookup)
                 user = authenticate(username=user_obj.username, password=password)
             except CustomUser.DoesNotExist:
                 pass
-        elif email:
+
+        # ── 3. Phone number lookup ────────────────────────────────────────────
+        phone = phone_number or ""
+        if phone and not user:
             try:
-                user_obj = CustomUser.objects.get(email=email)
+                user_obj = CustomUser.objects.get(phone_number=phone)
                 user = authenticate(username=user_obj.username, password=password)
             except CustomUser.DoesNotExist:
                 pass

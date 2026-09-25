@@ -100,7 +100,10 @@ export async function login(
   const response = await api.post<LoginResponseData>(
     '/auth/login/',
     {
-      email: credentials.email,
+      // Send under 'username' so the backend LoginSerializer can match directly
+      // by username without relying on EmailField validation.
+      // The backend also accepts 'email' as a fallback, so both paths work.
+      username: credentials.email,
       password: credentials.password,
     }
   );

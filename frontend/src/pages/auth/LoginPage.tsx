@@ -60,29 +60,32 @@ export function LoginPage() {
     if (!id)  { setError('Please enter your email or username.'); return; }
     if (!pwd) { setError('Please enter your password.');          return; }
 
-    // ── 1. local match ──
+    // ── 1. local match (offline users only) ──────────────────────────────────
+    // Only use the local store for a user that has a PLAIN-TEXT matching
+    // password stored.  If the stored password is empty or doesn't match
+    // the plaintext input, fall through to the server — never block.
     const match = users.find(
       (u) => (u.email.toLowerCase() === id || u.username.toLowerCase() === id) && u.isActive,
     );
     if (match) {
       const storedPwd = match.password ?? '';
-      if (storedPwd && storedPwd !== pwd) {
-        setError('Incorrect password. Please try again.');
+      if (storedPwd && storedPwd === pwd) {
+        // Exact plain-text match in local store — allow offline login
+        setSigningIn(true);
+        const safeRole = isValidRole(match.role) ? match.role : 'CASHIER';
+        loginWithLocalCredentials({
+          id: match.id, email: match.email,
+          firstName: match.firstName, lastName: match.lastName,
+          phoneNumber: match.phone, role: safeRole,
+          branch: match.branch || null,
+        });
+        setTimeout(() => { setSigningIn(false); navigate('/dashboard', { replace: true }); }, 500);
         return;
       }
-      setSigningIn(true);
-      const safeRole = isValidRole(match.role) ? match.role : 'CASHIER';
-      loginWithLocalCredentials({
-        id: match.id, email: match.email,
-        firstName: match.firstName, lastName: match.lastName,
-        phoneNumber: match.phone, role: safeRole,
-        branch: match.branch || null,
-      });
-      setTimeout(() => { setSigningIn(false); navigate('/dashboard', { replace: true }); }, 500);
-      return;
+      // Stored password absent or doesn't match plaintext → fall through to server
     }
 
-    // ── 2. server fallback ──
+    // ── 2. server login ───────────────────────────────────────────────────────
     setSigningIn(true);
     try {
       const res = await authService.login({ email: id, password: pwd, rememberMe });
@@ -353,7 +356,7 @@ export function LoginPage() {
               {/* Email */}
               <div className="rp-anim" style={{ animationDelay: '0.42s' }}>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  Email Address
+                  Username or Email
                 </label>
                 <div className="relative">
                   <Mail
@@ -362,7 +365,7 @@ export function LoginPage() {
                   />
                   <input
                     type="text"
-                    placeholder="you@example.com"
+                    placeholder="username or email"
                     autoComplete="username"
                     value={email}
                     onChange={(e) => { setEmail(e.target.value); setError(null); }}
@@ -444,7 +447,7 @@ export function LoginPage() {
                           </div>
                           <div className="flex items-center gap-1.5 text-[11px] text-blue-700">
                             <Mail className="h-3 w-3 shrink-0" />
-                            <strong>popmycsolution@gmail.com</strong>
+                            <strong>popmychubsolution@gmail.com</strong>
                           </div>
                         </div>
                       </div>
@@ -580,7 +583,7 @@ export function LoginPage() {
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-600">
                   <Mail className="h-3.5 w-3.5 shrink-0" style={{ color: TEAL }} />
-                  <strong>popmycsolution@gmail.com</strong>
+                  <strong>popmychubsolution@gmail.com</strong>
                 </div>
               </div>
 
