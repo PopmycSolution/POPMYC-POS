@@ -83,3 +83,5 @@ desktop/runtime/
 desktop/resources/nssm/*.exe
 # PostgreSQL installer — downloaded at build time (~300 MB), never committed
 desktop/pg-installer/
+# Generated installer executables
+desktop/installer/*.exe
