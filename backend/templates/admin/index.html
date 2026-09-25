@@ -1,0 +1,257 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block title %}POPMYC POS — Dashboard{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'popmyc_admin/popmyc_admin.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="pm-dashboard">
+
+  {# ── KPI Row 1 : Business & Licensing ─────────────────────────────────── #}
+  <p class="pm-section-title">📊 Overview</p>
+  <div class="pm-kpi-grid">
+
+    <div class="pm-kpi-card">
+      <div class="pm-kpi-label">Businesses</div>
+      <div class="pm-kpi-value">{{ total_businesses|default:"0" }}</div>
+      <div class="pm-kpi-sub">{{ active_businesses|default:"0" }} active</div>
+    </div>
+
+    <div class="pm-kpi-card">
+      <div class="pm-kpi-label">Branches</div>
+      <div class="pm-kpi-value">{{ total_branches|default:"0" }}</div>
+    </div>
+
+    <div class="pm-kpi-card pm-kpi-blue">
+      <div class="pm-kpi-label">Active Licenses</div>
+      <div class="pm-kpi-value">{{ active_licenses|default:"0" }}</div>
+      <div class="pm-kpi-sub">paid / lifetime</div>
+    </div>
+
+    <div class="pm-kpi-card pm-kpi-purple">
+      <div class="pm-kpi-label">Active Trials</div>
+      <div class="pm-kpi-value">{{ active_trials|default:"0" }}</div>
+      <div class="pm-kpi-sub">7-day trials</div>
+    </div>
+
+    <div class="pm-kpi-card pm-kpi-red">
+      <div class="pm-kpi-label">Expired</div>
+      <div class="pm-kpi-value">{{ expired_licenses|default:"0" }}</div>
+      <div class="pm-kpi-sub">licenses</div>
+    </div>
+
+    <div class="pm-kpi-card">
+      <div class="pm-kpi-label">Devices</div>
+      <div class="pm-kpi-value">{{ registered_devices|default:"0" }}</div>
+      <div class="pm-kpi-sub">active / registered</div>
+    </div>
+
+    <div class="pm-kpi-card pm-kpi-amber">
+      <div class="pm-kpi-label">Pending Syncs</div>
+      <div class="pm-kpi-value">{{ pending_syncs|default:"0" }}</div>
+    </div>
+
+    <div class="pm-kpi-card pm-kpi-red">
+      <div class="pm-kpi-label">Failed Syncs</div>
+      <div class="pm-kpi-value">{{ failed_syncs|default:"0" }}</div>
+    </div>
+
+    <div class="pm-kpi-card">
+      <div class="pm-kpi-label">Synced Today</div>
+      <div class="pm-kpi-value">{{ synced_today|default:"0" }}</div>
+    </div>
+
+    <div class="pm-kpi-card">
+      <div class="pm-kpi-label">Trial Codes</div>
+      <div class="pm-kpi-value">{{ pending_trial_codes|default:"0" }}</div>
+      <div class="pm-kpi-sub">unused / pending</div>
+    </div>
+
+  </div>{# /pm-kpi-grid #}
+
+  {# ── Content cards ────────────────────────────────────────────────────── #}
+  <p class="pm-section-title">🏢 Recent Activity</p>
+  <div class="pm-content-grid">
+
+    {# Recently registered businesses #}
+    <div class="pm-card">
+      <div class="pm-card-header">
+        🏪 Recently Registered Businesses
+        <a href="{% url 'admin:businesses_business_changelist' %}">View all →</a>
+      </div>
+      {% if recent_businesses %}
+      <table class="pm-table">
+        <thead><tr>
+          <th>Business</th>
+          <th>Category</th>
+          <th>Owner</th>
+          <th>Joined</th>
+        </tr></thead>
+        <tbody>
+        {% for biz in recent_businesses %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:businesses_business_change' biz.pk %}">
+              <strong>{{ biz.name }}</strong>
+            </a>
+          </td>
+          <td>
+            <span class="badge badge-gray">{{ biz.get_business_category_display|default:biz.business_type }}</span>
+          </td>
+          <td>{{ biz.owner.username|default:"—" }}</td>
+          <td style="white-space:nowrap;font-size:.75rem;color:#64748b">
+            {{ biz.created_at|date:"M j, Y" }}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="pm-empty">No businesses registered yet.</div>
+      {% endif %}
+    </div>{# /businesses card #}
+
+    {# Recently activated licenses #}
+    <div class="pm-card">
+      <div class="pm-card-header">
+        🔑 Recently Activated Licenses
+        <a href="{% url 'admin:licensing_license_changelist' %}">View all →</a>
+      </div>
+      {% if recent_licenses %}
+      <table class="pm-table">
+        <thead><tr>
+          <th>Business</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Expires</th>
+        </tr></thead>
+        <tbody>
+        {% for lic in recent_licenses %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:licensing_license_change' lic.pk %}">
+              {{ lic.business.name }}
+            </a>
+          </td>
+          <td>
+            {% if lic.is_trial %}
+              <span class="badge badge-purple">TRIAL</span>
+            {% else %}
+              <span class="badge badge-blue">{{ lic.license_type }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if lic.status == "ACTIVE" %}
+              <span class="badge badge-green">ACTIVE</span>
+            {% elif lic.status == "EXPIRED" %}
+              <span class="badge badge-red">EXPIRED</span>
+            {% elif lic.status == "SUSPENDED" %}
+              <span class="badge badge-amber">SUSPENDED</span>
+            {% else %}
+              <span class="badge badge-gray">{{ lic.status }}</span>
+            {% endif %}
+          </td>
+          <td style="white-space:nowrap;font-size:.75rem;color:#64748b">
+            {% if lic.expiry_date %}{{ lic.expiry_date|date:"M j, Y" }}{% else %}∞{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="pm-empty">No active licenses yet.</div>
+      {% endif %}
+    </div>{# /licenses card #}
+
+    {# Failed / problem syncs #}
+    <div class="pm-card">
+      <div class="pm-card-header" style="background:#7f1d1d;">
+        ⚠️ Failed / Conflict Syncs
+        <a href="{% url 'admin:synchronization_syncrecord_changelist' %}?status__exact=failed">View all →</a>
+      </div>
+      {% if recent_failed_syncs %}
+      <table class="pm-table">
+        <thead><tr>
+          <th>Model</th>
+          <th>Status</th>
+          <th>Attempts</th>
+          <th>Updated</th>
+        </tr></thead>
+        <tbody>
+        {% for rec in recent_failed_syncs %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:synchronization_syncrecord_change' rec.pk %}">
+              {{ rec.app_label }}.{{ rec.model_name }}
+            </a>
+          </td>
+          <td>
+            {% if rec.status == "failed" %}
+              <span class="badge badge-red">FAILED</span>
+            {% else %}
+              <span class="badge badge-amber">CONFLICT</span>
+            {% endif %}
+          </td>
+          <td style="text-align:center">{{ rec.attempts }}</td>
+          <td style="white-space:nowrap;font-size:.75rem;color:#64748b">
+            {{ rec.updated_at|date:"M j H:i" }}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="pm-empty">✅ No failed syncs — everything looks good.</div>
+      {% endif %}
+    </div>{# /failed syncs card #}
+
+    {# Registered devices #}
+    <div class="pm-card">
+      <div class="pm-card-header">
+        🖥 Recently Registered Devices
+        <a href="{% url 'admin:cloud_clouddevice_changelist' %}">View all →</a>
+      </div>
+      {% if recent_devices %}
+      <table class="pm-table">
+        <thead><tr>
+          <th>Device</th>
+          <th>Business</th>
+          <th>Type</th>
+          <th>Registered</th>
+        </tr></thead>
+        <tbody>
+        {% for dev in recent_devices %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:cloud_clouddevice_change' dev.pk %}">
+              {{ dev.name|default:dev.device_uuid }}
+            </a>
+          </td>
+          <td>{{ dev.business.name }}</td>
+          <td>
+            <span class="badge badge-gray">{{ dev.device_type }}</span>
+          </td>
+          <td style="white-space:nowrap;font-size:.75rem;color:#64748b">
+            {{ dev.first_registered|date:"M j, Y" }}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="pm-empty">No devices registered yet.</div>
+      {% endif %}
+    </div>{# /devices card #}
+
+  </div>{# /pm-content-grid #}
+
+  {# ── Django app module list (kept for navigation) ─────────────────────── #}
+  <p class="pm-section-title">📂 Administration Modules</p>
+  {% include "admin/app_list.html" with show_changelinks=True %}
+
+</div>{# /pm-dashboard #}
+{% endblock %}

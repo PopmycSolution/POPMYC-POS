@@ -4,8 +4,18 @@ from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
+# ── POPMYC custom admin site ──────────────────────────────────────────────────
+# Route /admin/ to the custom PopmycAdminSite (dashboard + KPI cards).
+# The default admin.site branding is also set here for any code that still
+# references it directly (e.g. DRF browsable API).
+from popmyc_admin.admin_site import popmyc_admin_site
+
+admin.site.site_header   = "POPMYC POS Administration"
+admin.site.site_title    = "POPMYC Admin"
+admin.site.index_title   = "Dashboard"
+
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path("admin/", popmyc_admin_site.urls),
     path("api-auth/", include("rest_framework.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/schema/swagger-ui/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

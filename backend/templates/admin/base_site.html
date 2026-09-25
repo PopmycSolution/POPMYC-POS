@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}{{ title }} | POPMYC POS Admin{% endblock %}
+
+{% block branding %}
+<h1 id="site-name">
+  <a href="{% url 'admin:index' %}">
+    <span style="color:#00897B;font-weight:900">POPMYC</span>
+    <span style="color:#ffffff;font-weight:400"> POS&nbsp;·&nbsp;Admin</span>
+  </a>
+</h1>
+{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'popmyc_admin/popmyc_admin.css' %}">
+<style>
+  /* Inject branding into every page — not just dashboard */
+  body.change-list #content-title,
+  body.change-form #content-title {
+    color: var(--pm-dark);
+    font-weight: 700;
+  }
+</style>
+{% endblock %}

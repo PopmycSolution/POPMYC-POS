@@ -1,0 +1,193 @@
+/* ============================================================
+   POPMYC POS – Admin Dashboard CSS
+   Brand colours: teal #00897B / dark #1e293b / light bg #f0faf8
+   ============================================================ */
+
+/* ── Variables ─────────────────────────────────────────────── */
+:root {
+  --pm-teal:      #00897B;
+  --pm-teal-dark: #00695C;
+  --pm-teal-pale: #e0f2f1;
+  --pm-dark:      #1e293b;
+  --pm-mid:       #475569;
+  --pm-light:     #f0faf8;
+  --pm-border:    #e2e8f0;
+  --pm-white:     #ffffff;
+  --pm-radius:    10px;
+  --pm-shadow:    0 2px 12px rgba(0,0,0,.07);
+  --pm-shadow-lg: 0 4px 24px rgba(0,0,0,.10);
+
+  /* Status */
+  --c-green:  #166534; --bg-green:  #dcfce7;
+  --c-blue:   #1e40af; --bg-blue:   #dbeafe;
+  --c-amber:  #92400e; --bg-amber:  #fef3c7;
+  --c-red:    #991b1b; --bg-red:    #fee2e2;
+  --c-gray:   #374151; --bg-gray:   #f3f4f6;
+  --c-purple: #5b21b6; --bg-purple: #ede9fe;
+}
+
+/* ── Header / branding ──────────────────────────────────────── */
+#header {
+  background: var(--pm-dark) !important;
+  color: var(--pm-white) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+#header a:link, #header a:visited { color: var(--pm-teal-pale) !important; }
+#header a:hover                   { color: var(--pm-white) !important; }
+
+#branding h1 { font-size: 1.3rem; font-weight: 700; letter-spacing: .5px; }
+#branding h1 a { color: var(--pm-white) !important; text-decoration: none; }
+#branding h1 a:hover { color: var(--pm-teal-pale) !important; }
+
+/* ── Breadcrumbs ────────────────────────────────────────────── */
+div.breadcrumbs {
+  background: var(--pm-teal) !important;
+  color: var(--pm-white) !important;
+  padding: 8px 16px;
+  font-size: .85rem;
+}
+div.breadcrumbs a { color: var(--pm-white) !important; opacity: .85; }
+div.breadcrumbs a:hover { opacity: 1; }
+
+/* ── Content area ───────────────────────────────────────────── */
+#content { background: var(--pm-light); }
+body     { background: var(--pm-light); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+/* ── Dashboard grid ─────────────────────────────────────────── */
+.pm-dashboard { padding: 24px; max-width: 1400px; }
+
+.pm-section-title {
+  font-size: .70rem; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--pm-mid);
+  margin: 28px 0 12px;
+}
+
+/* KPI card row */
+.pm-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.pm-kpi-card {
+  background: var(--pm-white);
+  border-radius: var(--pm-radius);
+  box-shadow: var(--pm-shadow);
+  padding: 18px 20px 14px;
+  border: 1px solid var(--pm-border);
+  transition: box-shadow .15s, transform .15s;
+  position: relative;
+  overflow: hidden;
+}
+.pm-kpi-card:hover { box-shadow: var(--pm-shadow-lg); transform: translateY(-2px); }
+.pm-kpi-card::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--pm-teal);
+}
+.pm-kpi-card.pm-kpi-red::before    { background: #dc2626; }
+.pm-kpi-card.pm-kpi-amber::before  { background: #d97706; }
+.pm-kpi-card.pm-kpi-blue::before   { background: #2563eb; }
+.pm-kpi-card.pm-kpi-purple::before { background: #7c3aed; }
+
+.pm-kpi-label {
+  font-size: .72rem; font-weight: 600; color: var(--pm-mid);
+  text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px;
+}
+.pm-kpi-value {
+  font-size: 2rem; font-weight: 800; color: var(--pm-dark); line-height: 1;
+}
+.pm-kpi-sub { font-size: .78rem; color: var(--pm-mid); margin-top: 4px; }
+
+/* Content card (tables) */
+.pm-content-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  gap: 18px;
+  margin-top: 4px;
+}
+.pm-card {
+  background: var(--pm-white);
+  border-radius: var(--pm-radius);
+  box-shadow: var(--pm-shadow);
+  border: 1px solid var(--pm-border);
+  overflow: hidden;
+}
+.pm-card-header {
+  padding: 13px 18px;
+  background: var(--pm-dark);
+  color: var(--pm-white);
+  font-size: .8rem; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+.pm-card-header a { color: var(--pm-teal-pale) !important; font-size: .75rem; margin-left: auto; }
+.pm-card-header a:hover { color: var(--pm-white) !important; }
+
+.pm-table {
+  width: 100%; border-collapse: collapse;
+  font-size: .82rem;
+}
+.pm-table th {
+  background: #f8fafc; text-align: left; padding: 8px 14px;
+  font-size: .70rem; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--pm-mid);
+  border-bottom: 1px solid var(--pm-border);
+}
+.pm-table td {
+  padding: 9px 14px; border-bottom: 1px solid #f1f5f9;
+  color: var(--pm-dark); vertical-align: middle;
+}
+.pm-table tr:last-child td { border-bottom: none; }
+.pm-table tr:hover td { background: var(--pm-light); }
+
+.pm-empty {
+  padding: 24px; text-align: center; color: var(--pm-mid);
+  font-size: .82rem; font-style: italic;
+}
+
+/* ── Status badges ───────────────────────────────────────────── */
+.badge {
+  display: inline-block; padding: 2px 9px;
+  border-radius: 99px; font-size: .70rem; font-weight: 700;
+  letter-spacing: .04em; white-space: nowrap;
+}
+.badge-green  { background: var(--bg-green);  color: var(--c-green);  }
+.badge-blue   { background: var(--bg-blue);   color: var(--c-blue);   }
+.badge-amber  { background: var(--bg-amber);  color: var(--c-amber);  }
+.badge-red    { background: var(--bg-red);    color: var(--c-red);    }
+.badge-gray   { background: var(--bg-gray);   color: var(--c-gray);   }
+.badge-purple { background: var(--bg-purple); color: var(--c-purple); }
+
+/* ── Admin list pages ────────────────────────────────────────── */
+#changelist .results table { border-radius: 8px; overflow: hidden; }
+#changelist-filter h2      { background: var(--pm-dark); color: var(--pm-white); }
+#changelist-filter h3      { font-size: .78rem; }
+
+.submit-row input[type=submit], .submit-row a.deletelink-box a,
+a.addlink, input[type=submit], button[type=submit] {
+  border-radius: 7px !important;
+}
+.default      { background: var(--pm-teal)      !important; border-color: var(--pm-teal-dark) !important; }
+.default:hover{ background: var(--pm-teal-dark) !important; }
+
+/* ── Sidebar nav (app list on index) ─────────────────────────── */
+#content-main .app-businesses h2,
+#content-main .app-licensing h2,
+#content-main .app-synchronization h2,
+#content-main .app-cloud h2,
+#content-main .app-accounts h2 {
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+#content-main .app-businesses h2  { background: #f0fdf4; }
+#content-main .app-licensing h2   { background: #fef9ec; }
+#content-main .app-synchronization h2 { background: #eff6ff; }
+#content-main .app-cloud h2       { background: #f5f3ff; }
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .pm-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .pm-content-grid { grid-template-columns: 1fr; }
+}
