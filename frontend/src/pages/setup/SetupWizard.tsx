@@ -792,7 +792,7 @@ export default function SetupWizard() {
 
         {/* Footer */}
         <p className="mt-6 text-[11px] text-slate-400">
-          © 2025 POPMyC Solutions · <a href="mailto:popmycsolution@gmail.com" className="underline">Support</a>
+          © 2025 POPMyC Solutions · <a href="mailto:popmychubsolution@gmail.com" className="underline">Support</a>
         </p>
       </div>
 
