@@ -29,6 +29,7 @@ import DocumentationPage from '@/pages/docs/DocumentationPage';
 import DebtPage from '@/pages/debt/DebtPage';
 import BranchesPage from '@/pages/branches/BranchesPage';
 import { useAuthStore } from '@/stores/auth.store';
+import { useSettingsStore } from '@/stores/settings.store';
 import { Button } from '@/components/ui/Button';
 import { APP_NAME } from '@/utils/constants';
 import { Home, ArrowLeft } from 'lucide-react';
@@ -91,6 +92,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const accessToken     = useAuthStore((s) => s.accessToken);
   const user            = useAuthStore((s) => s.user);
+  const syncFromBackend = useSettingsStore((s) => s.syncFromBackend);
 
   const authed = isAuthenticated || !!accessToken || !!user;
 
@@ -109,6 +111,15 @@ function RequireAuth({ children }: { children: ReactNode }) {
       sessionStorage.setItem('redirectAfterLogin', location.pathname + location.search);
     }
   }, [authed, _hasHydrated, location]);
+
+  // Sync business/settings data from the backend once authentication is established.
+  // This ensures System Settings always shows the customer's real Business record
+  // rather than localStorage defaults — critical after a fresh Setup Wizard completion.
+  useEffect(() => {
+    if (_hasHydrated && authed) {
+      void syncFromBackend();
+    }
+  }, [_hasHydrated, authed, syncFromBackend]);
 
   // Wait for Zustand rehydration — prevents the "blink" on page reload
   if (!_hasHydrated) return <AuthLoadingSplash />;

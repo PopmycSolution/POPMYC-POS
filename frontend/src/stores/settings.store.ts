@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { BusinessCategory } from '@/types';
 import { NEGOTIABLE_BUSINESS_CATEGORIES } from '@/types';
+import api from '@/services/api';
 
 export interface BusinessConfig {
   name: string;
@@ -111,6 +112,12 @@ interface SettingsStore {
   updateInventory: (data: Partial<InventoryConfig>) => void;
   togglePaymentMethod: (id: string) => void;
   updateEmailNotifications: (data: Partial<EmailNotificationConfig>) => void;
+  /**
+   * Fetch real business/settings data from the backend and merge it into
+   * the store.  Called after login so System Settings always reflects
+   * the customer's actual Business record — not the localStorage defaults.
+   */
+  syncFromBackend: () => Promise<void>;
   /** Computed: does the current business track stock quantities? */
   readonly stockEnabled: boolean;
   /** Computed: canonical three-way operating mode */
@@ -126,13 +133,16 @@ interface SettingsStore {
 const STORAGE_KEY = 'popmyc-settings';
 
 const defaultBusiness: BusinessConfig = {
-  name: 'POPMYC Retail POS',
+  // These are intentional empty/generic defaults for a fresh installation.
+  // Real values are loaded from the backend after login via syncFromBackend().
+  // DO NOT put developer names, addresses, phone numbers, or emails here.
+  name: '',
   type: 'general',
   businessCategory: 'GENERAL_RETAIL',
-  address: '123 Main Street, Accra, Ghana',
-  phone: '+233 24 456 7890',
-  email: 'info@popmyc.com',
-  tin: 'C0001234567',
+  address: '',
+  phone: '',
+  email: '',
+  tin: '',
   currency: 'GHS',
   currencySymbol: 'GH₵',
   logoUrl: '',
@@ -336,6 +346,116 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
         persist(next);
         return { emailNotifications: next.emailNotifications };
       });
+    },
+
+    syncFromBackend: async () => {
+      // Fetch the authenticated user's Business from the backend and merge
+      // it into the settings store so System Settings always shows the
+      // customer's real data rather than localStorage defaults.
+      //
+      // This is intentionally fire-and-forget from the caller's perspective:
+      // if the network request fails (offline) the store keeps whatever it
+      // had from localStorage.  On next successful request it will sync again.
+      try {
+        // GET /api/v1/businesses/ — returns the user's own business (scoped by auth)
+        type BizResponse = {
+          results?: BusinessRecord[];
+          id?: string;
+          name?: string;
+          business_category?: string;
+          address?: string;
+          phone?: string;
+          email?: string;
+          currency?: string;
+          currency_symbol?: string;
+          tin?: string;
+          logo?: string;
+        };
+        type BusinessRecord = {
+          id: string;
+          name: string;
+          business_category?: string;
+          address?: string;
+          phone?: string;
+          email?: string;
+          currency?: string;
+          currency_symbol?: string;
+          tin?: string;
+          logo?: string;
+        };
+
+        const bizRes = await api.get<BizResponse>('/businesses/');
+        const list: BusinessRecord[] = Array.isArray(bizRes.data)
+          ? (bizRes.data as unknown as BusinessRecord[])
+          : (bizRes.data as { results?: BusinessRecord[] }).results ?? [];
+        const biz = list[0];
+
+        if (biz) {
+          const update: Partial<BusinessConfig> = {};
+          if (biz.name)              update.name             = biz.name;
+          if (biz.business_category) update.businessCategory = biz.business_category as BusinessCategory;
+          if (biz.address != null)   update.address          = biz.address;
+          if (biz.phone != null)     update.phone            = biz.phone;
+          if (biz.email != null)     update.email            = biz.email;
+          if (biz.currency)          update.currency         = biz.currency;
+          if (biz.currency_symbol)   update.currencySymbol   = biz.currency_symbol;
+          if (biz.tin != null)       update.tin              = biz.tin;
+          // logo is a URL string when the backend has it; empty string clears the logo
+          if (biz.logo != null)      update.logoUrl          = biz.logo ?? '';
+
+          set((state) => {
+            const next = { ...state, business: { ...state.business, ...update } };
+            persist(next);
+            return { business: next.business };
+          });
+        }
+
+        // Also fetch business settings (inventory mode, pricing config)
+        const settingsRes = await api.get<{
+          inventory_mode?: string;
+          allow_cashier_price_negotiation?: boolean;
+          tax_config?: {
+            enabled?: boolean;
+            name?: string;
+            rate?: number;
+            inclusive?: boolean;
+          };
+        }>('/businesses/settings/my-settings/');
+
+        const sData = settingsRes.data;
+        if (sData) {
+          if (sData.inventory_mode) {
+            set((state) => {
+              const next = { ...state, inventory: { ...state.inventory, inventoryMode: sData.inventory_mode as InventoryMode } };
+              persist(next);
+              return { inventory: next.inventory };
+            });
+          }
+          if (typeof sData.allow_cashier_price_negotiation === 'boolean') {
+            set((state) => {
+              const next = { ...state, pricing: { ...state.pricing, allowCashierPriceNegotiation: sData.allow_cashier_price_negotiation as boolean } };
+              persist(next);
+              return { pricing: next.pricing };
+            });
+          }
+          if (sData.tax_config) {
+            const tc = sData.tax_config;
+            const taxUpdate: Partial<TaxConfig> = {};
+            if (typeof tc.enabled  === 'boolean') taxUpdate.enabled  = tc.enabled;
+            if (tc.name)                           taxUpdate.name     = tc.name;
+            if (typeof tc.rate     === 'number')   taxUpdate.rate     = tc.rate;
+            if (typeof tc.inclusive === 'boolean') taxUpdate.inclusive = tc.inclusive;
+            set((state) => {
+              const next = { ...state, tax: { ...state.tax, ...taxUpdate } };
+              persist(next);
+              return { tax: next.tax };
+            });
+          }
+        }
+      } catch {
+        // Offline or unauthenticated — keep existing store values.
+        // Will sync on next successful authenticated request.
+      }
     },
   };
 });

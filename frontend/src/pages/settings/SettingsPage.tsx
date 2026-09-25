@@ -358,6 +358,41 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2000);
   }
 
+  // ── Save General (business info) to both localStorage AND the backend ───────
+  // This ensures the Business record in the database is kept in sync with
+  // whatever the user edits in System Settings, so it remains the single
+  // source of truth (not just a local copy).
+  async function saveGeneral() {
+    showSaved();
+    try {
+      // Fetch the business id first (it's not stored in the settings store)
+      const listRes = await api.get<{ results?: { id: string }[] } | { id: string }[]>('/businesses/');
+      const list = Array.isArray(listRes.data)
+        ? (listRes.data as { id: string }[])
+        : ((listRes.data as { results?: { id: string }[] }).results ?? []);
+      const bizId = list[0]?.id;
+      if (bizId) {
+        // PATCH text fields only.
+        // The logo field is an ImageField on the backend — uploading a base64
+        // string via PATCH would fail. Logo uploads require a separate multipart
+        // form POST which the user can do via the Media/Logo upload flow.
+        await api.patch(`/businesses/${bizId}/`, {
+          name:              business.name,
+          business_category: business.businessCategory,
+          address:           business.address,
+          phone:             business.phone,
+          email:             business.email,
+          currency:          business.currency,
+          currency_symbol:   business.currencySymbol,
+          tin:               business.tin,
+        });
+      }
+    } catch {
+      // Offline or permission error — the localStorage copy is still saved.
+      // No error surfaced to avoid disrupting the UX for non-critical field saves.
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -457,7 +492,7 @@ export default function SettingsPage() {
                     <input value={business.currencySymbol} onChange={(e) => updateBusiness({ currencySymbol: e.target.value })} className={inputClass} />
                   </SettingField>
                 </div>
-                <div className="flex justify-end pt-2"><SaveButton onClick={showSaved} /></div>
+                <div className="flex justify-end pt-2"><SaveButton onClick={saveGeneral} /></div>
               </div>
             </div>
           )}
