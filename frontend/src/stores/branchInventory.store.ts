@@ -100,74 +100,9 @@ const tsNow = () => new Date().toISOString();
 // Main Branch (branch-1) is the primary warehouse with full stock.
 // Other branches only hold what has been physically transferred to them.
 
-const SEED_STOCK: BranchStockMap = {
-  // Main Branch — full catalog, full quantities
-  'branch-1': {
-    p1:  { qty: 432, reorderPoint: 50,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p2:  { qty: 218, reorderPoint: 30,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p3:  { qty: 56,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p4:  { qty: 98,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p5:  { qty: 164, reorderPoint: 30,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p6:  { qty: 40,  reorderPoint: 25,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p7:  { qty: 87,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p8:  { qty: 12,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p9:  { qty: 19,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p10: { qty: 15,  reorderPoint: 25,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p11: { qty: 42,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p12: { qty: 28,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p13: { qty: 35,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p14: { qty: 64,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p15: { qty: 8,   reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p16: { qty: 189, reorderPoint: 30,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p17: { qty: 8,   reorderPoint: 25,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p18: { qty: 52,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-  },
-
-  // Kumasi Branch — only products physically transferred/stocked here
-  // Products NOT listed = 0 stock at this branch
-  'branch-2': {
-    p1:  { qty: 120, reorderPoint: 30,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p2:  { qty: 48,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p3:  { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p4:  { qty: 24,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p5:  { qty: 60,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p6:  { qty: 10,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p7:  { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p8:  { qty: 0,   reorderPoint: 5,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p9:  { qty: 8,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p10: { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p11: { qty: 18,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p12: { qty: 12,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p13: { qty: 0,   reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p14: { qty: 20,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p15: { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p16: { qty: 55,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p17: { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p18: { qty: 15,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-  },
-
-  // Takoradi Branch — limited product range
-  'branch-3': {
-    p1:  { qty: 80,  reorderPoint: 25,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p2:  { qty: 36,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p3:  { qty: 20,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p4:  { qty: 0,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p5:  { qty: 45,  reorderPoint: 15,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p6:  { qty: 15,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p7:  { qty: 22,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p8:  { qty: 0,   reorderPoint: 5,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p9:  { qty: 12,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p10: { qty: 8,   reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p11: { qty: 0,   reorderPoint: 5,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p12: { qty: 0,   reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p13: { qty: 14,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p14: { qty: 30,  reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p15: { qty: 0,   reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p16: { qty: 70,  reorderPoint: 20,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p17: { qty: 5,   reorderPoint: 8,   lastUpdated: '2026-09-01T10:00:00.000Z' },
-    p18: { qty: 18,  reorderPoint: 10,  lastUpdated: '2026-09-01T10:00:00.000Z' },
-  },
-};
+// No seed stock — fresh installations start with zero inventory.
+// Stock levels are populated as the customer adds products and records purchases.
+const SEED_STOCK: BranchStockMap = {};
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 export const useBranchInventoryStore = create<BranchInventoryStore>()(

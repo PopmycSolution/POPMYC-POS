@@ -94,11 +94,25 @@ def resolve_data_dir() -> Path:
          the service runs under.  Always readable/writable by LocalSystem.
       3. %APPDATA%\\POPMYC POS  (Windows per-user fallback — dev/legacy)
       4. ~/.popmyc-pos           (non-Windows dev fallback)
+
+    GUARD: If POPMYC_DATA_DIR is set but doesn't end with 'POPMYC POS'
+    (case-insensitive), it was likely truncated by the old NSSM
+    AppEnvironmentExtra space-splitting bug (where 'C:\\ProgramData\\POPMYC POS'
+    became 'C:\\ProgramData\\POPMYC').  In that case fall through to priority 2
+    so the correct machine-wide path is used.
     """
-    if os.environ.get("POPMYC_DATA_DIR"):
-        p = Path(os.environ["POPMYC_DATA_DIR"])
-        log(f"Data dir (from POPMYC_DATA_DIR env): {p}")
-        return p
+    raw = os.environ.get("POPMYC_DATA_DIR", "").strip()
+    if raw:
+        if raw.upper().endswith("POPMYC POS"):
+            p = Path(raw)
+            log(f"Data dir (from POPMYC_DATA_DIR env): {p}")
+            return p
+        else:
+            log(
+                f"WARNING: POPMYC_DATA_DIR='{raw}' does not end with 'POPMYC POS' — "
+                f"likely truncated by NSSM space-splitting bug. "
+                f"Ignoring and using %PROGRAMDATA%\\POPMYC POS instead."
+            )
     programdata = os.environ.get("PROGRAMDATA")
     if programdata:
         p = Path(programdata) / "POPMYC POS"

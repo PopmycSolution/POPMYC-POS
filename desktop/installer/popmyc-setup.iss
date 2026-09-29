@@ -307,13 +307,34 @@ begin
   Exec(NssmPath, 'set {#ServiceName} AppDirectory "' + BackendDir + '"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  // Environment variables
-  Exec(NssmPath,
-    'set {#ServiceName} AppEnvironmentExtra ' +
-    '"DJANGO_SETTINGS_MODULE=config.settings_desktop" ' +
-    '"POPMYC_DATA_DIR=' + DataDir + '" ' +
-    '"PYTHONUNBUFFERED=1"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Environment variables — written directly to the registry as REG_MULTI_SZ.
+  //
+  // WHY NOT nssm set AppEnvironmentExtra with multiple tokens:
+  //   NSSM 2.24's AppEnvironmentExtra command-line handler treats the entire
+  //   remainder of the argument list as a single concatenated string, joining
+  //   the tokens with spaces.  A data directory like "C:\ProgramData\POPMYC POS"
+  //   contains a space, so passing it alongside other tokens causes NSSM to
+  //   store all three values as one mangled string:
+  //     "DJANGO_SETTINGS_MODULE=... POPMYC_DATA_DIR=C:\ProgramData\POPMYC POS PYTHONUNBUFFERED=1"
+  //   When the service starts, NSSM re-splits on spaces, producing:
+  //     POPMYC_DATA_DIR=C:\ProgramData\POPMYC    (truncated at the space)
+  //     POS                                       (spurious extra entry)
+  //   This causes service_launcher.py to use the wrong data directory.
+  //
+  // FIX: write the REG_MULTI_SZ directly via RegWriteMultiStringValue.
+  //   The Data parameter is a String with entries separated by #0 (null char).
+  //   This bypasses all shell/command-line parsing, so the space in
+  //   "POPMYC POS" is preserved exactly as stored — no splitting possible.
+  //   NSSM reads AppEnvironmentExtra as REG_MULTI_SZ at service start time.
+  RegWriteMultiStringValue(
+    HKLM,
+    'SYSTEM\CurrentControlSet\Services\{#ServiceName}\Parameters',
+    'AppEnvironmentExtra',
+    'DJANGO_SETTINGS_MODULE=config.settings_desktop' + #0 +
+    'POPMYC_DATA_DIR=' + DataDir + #0 +
+    'PYTHONUNBUFFERED=1'
+  );
+  Log('AppEnvironmentExtra written to registry. POPMYC_DATA_DIR=' + DataDir);
 
   // Stdout and stderr captured by NSSM → log files
   Exec(NssmPath, 'set {#ServiceName} AppStdout "' + StdoutLog + '"',
@@ -379,6 +400,7 @@ procedure CreateCustomerDataDirectory();
 var
   DataDir, ReadmePath: String;
   Lines: TArrayOfString;
+  ResultCode: Integer;
 begin
   DataDir := GetDataDir();
 
@@ -386,6 +408,29 @@ begin
   ForceDirectories(DataDir + '\logs');
   ForceDirectories(DataDir + '\media');
   ForceDirectories(DataDir + '\backups');
+
+  // Grant all local users (including the customer's login account) full
+  // modify rights on the data directory.
+  //
+  // WHY: C:\ProgramData is writable only by Administrators by default.
+  // The Electron process runs as the logged-in user (non-admin after setup).
+  // Without this grant:
+  //   - Electron's ensureDataDir() cannot create logs/, media/, backups/
+  //   - fs.createWriteStream('...logs\backend.log') throws EPERM
+  //   - service_launcher.py cannot write its log files
+  // The installer runs as admin, so we use it to set the ACL once.
+  //
+  // We use the well-known SID *S-1-5-32-545 for the Users group instead of
+  // the name "Users" because:
+  //   1. The name is localized (Users / Benutzer / Utilisateurs etc.)
+  //   2. Quoting "Users:(OI)(CI)M" as one string makes icacls parse it
+  //      as a literal account name with colons — causing "invalid parameter".
+  // *S-1-5-32-545 works on every Windows locale without quoting issues.
+  // (OI)(CI)M = Object Inherit + Container Inherit + Modify rights.
+  Exec(ExpandConstant('{sys}\icacls.exe'),
+    '"' + DataDir + '" /grant *S-1-5-32-545:(OI)(CI)M /T /Q',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('icacls grant *S-1-5-32-545 modify on ' + DataDir + ' (exit=' + IntToStr(ResultCode) + ')');
 
   ReadmePath := DataDir + '\README.txt';
   if not FileExists(ReadmePath) then begin

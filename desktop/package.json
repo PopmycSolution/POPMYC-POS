@@ -65,7 +65,6 @@
           "!**/.env.example",
           "!**/desktop_data/**",
           "!**/media/**",
-          "!**/backups/**",
           "!**/logs/**"
         ]
       },

@@ -26,22 +26,8 @@ function genId(): string {
   return `br-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
 }
 
-function daysAgo(d: number): string {
-  const dt = new Date();
-  dt.setDate(dt.getDate() - d);
-  return dt.toISOString();
-}
-
-const seedBrands: BrandRecord[] = [
-  { id: 'br1', name: 'Coca-Cola', code: 'COCA', description: 'Global beverage brand', logoUrl: '', website: 'https://coca-cola.com', isActive: true, productCount: 5, createdAt: daysAgo(365) },
-  { id: 'br2', name: 'Nestlé', code: 'NESTLE', description: 'Food and beverage multinational', logoUrl: '', website: 'https://nestle.com', isActive: true, productCount: 8, createdAt: daysAgo(300) },
-  { id: 'br3', name: 'Unilever', code: 'UNILEV', description: 'Consumer goods company', logoUrl: '', website: 'https://unilever.com', isActive: true, productCount: 12, createdAt: daysAgo(250) },
-  { id: 'br4', name: 'Procter & Gamble', code: 'PG', description: 'Household products', logoUrl: '', website: 'https://pg.com', isActive: true, productCount: 7, createdAt: daysAgo(200) },
-  { id: 'br5', name: 'Dettol', code: 'DETTOL', description: 'Hygiene and health brand', logoUrl: '', website: 'https://dettol.com', isActive: true, productCount: 4, createdAt: daysAgo(180) },
-  { id: 'br6', name: 'Fan Milk', code: 'FANMILK', description: 'West African dairy brand', logoUrl: '', website: '', isActive: true, productCount: 6, createdAt: daysAgo(150) },
-  { id: 'br7', name: 'Colgate', code: 'COLGATE', description: 'Oral care products', logoUrl: '', website: 'https://colgate.com', isActive: true, productCount: 3, createdAt: daysAgo(120) },
-  { id: 'br8', name: 'Samsung', code: 'SAMSUNG', description: 'Electronics and technology', logoUrl: '', website: 'https://samsung.com', isActive: false, productCount: 2, createdAt: daysAgo(90) },
-];
+// No seed brands — fresh installations start empty.
+const seedBrands: BrandRecord[] = [];
 
 function loadState(): BrandRecord[] {
   try {

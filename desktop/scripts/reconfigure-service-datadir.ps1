@@ -68,22 +68,37 @@ sc.exe stop POPMYCBackend 2>&1 | Out-Null
 Start-Sleep -Seconds 4
 
 # Update NSSM service configuration
-if (Test-Path $nssm) {
-    & $nssm set POPMYCBackend AppEnvironmentExtra `
-        "DJANGO_SETTINGS_MODULE=config.settings_desktop" `
-        "POPMYC_DATA_DIR=$dataDir" `
+# IMPORTANT: Do NOT use `nssm set AppEnvironmentExtra` with multiple arguments.
+# NSSM 2.24 joins all tokens into one string when setting AppEnvironmentExtra,
+# then re-splits on spaces at service start — corrupting any value with a space
+# (such as "C:\ProgramData\POPMYC POS").
+# Write the REG_MULTI_SZ directly so each variable is stored as a separate
+# null-separated element, exactly as NSSM expects.
+$regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\POPMYCBackend\Parameters"
+
+if (Test-Path $regPath) {
+    # Write AppEnvironmentExtra as REG_MULTI_SZ (array of strings)
+    # Each element is one KEY=VALUE entry. PowerShell's Set-ItemProperty
+    # with a string array writes REG_MULTI_SZ automatically.
+    $envVars = @(
+        "DJANGO_SETTINGS_MODULE=config.settings_desktop",
+        "POPMYC_DATA_DIR=$dataDir",
         "PYTHONUNBUFFERED=1"
-    & $nssm set POPMYCBackend AppStdout "$dataDir\logs\service_stdout.log"
-    & $nssm set POPMYCBackend AppStderr "$dataDir\logs\service_stderr.log"
-    Write-Host "NSSM service updated via nssm.exe"
-} else {
-    # Fallback: update registry directly
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\POPMYCBackend\Parameters"
-    $envVal  = "DJANGO_SETTINGS_MODULE=config.settings_desktop`nPOPMYC_DATA_DIR=$dataDir`nPYTHONUNBUFFERED=1"
-    Set-ItemProperty -Path $regPath -Name "AppEnvironmentExtra" -Value $envVal
+    )
+    Set-ItemProperty -Path $regPath -Name "AppEnvironmentExtra" -Value $envVars
     Set-ItemProperty -Path $regPath -Name "AppStdout"           -Value "$dataDir\logs\service_stdout.log"
     Set-ItemProperty -Path $regPath -Name "AppStderr"           -Value "$dataDir\logs\service_stderr.log"
-    Write-Host "Service registry updated directly"
+    Write-Host "Registry updated. POPMYC_DATA_DIR=$dataDir"
+
+    # Also update log paths via nssm for the stdout/stderr settings
+    if (Test-Path $nssm) {
+        & $nssm set POPMYCBackend AppStdout "$dataDir\logs\service_stdout.log"
+        & $nssm set POPMYCBackend AppStderr "$dataDir\logs\service_stderr.log"
+        Write-Host "NSSM log paths updated."
+    }
+} else {
+    Write-Warning "POPMYCBackend service registry key not found at $regPath"
+    Write-Warning "The service may not be installed. Run the installer first."
 }
 
 # Restart the service

@@ -88,14 +88,88 @@ def _load_env(data_dir: str) -> dict:
 
 
 def _update_env(data_dir: str, updates: dict) -> None:
-    """Update specific keys in the .env file, preserving all others."""
-    env_path = Path(data_dir) / ".env"
-    lines = []
-    if env_path.exists():
-        with open(env_path) as f:
-            lines = f.readlines()
+    """
+    Update specific keys in the .env file, preserving all others.
 
-    updated_keys = set()
+    If the file doesn't exist OR is missing critical Django settings
+    (DJANGO_SECRET_KEY, DJANGO_DEBUG, etc.), write a complete fresh .env
+    so the service never starts with an incomplete configuration.
+    """
+    import secrets as _secrets
+    import string as _string
+
+    env_path = Path(data_dir) / ".env"
+
+    # ── Generate a proper Django secret key ───────────────────────────────────
+    # Uses only alphanumeric + safe punctuation — no shell-special chars
+    # (no $, ^, !, `, ", \, |, &, <, >) so the value survives being written
+    # to the .env file and read back correctly on every OS/shell.
+    _alphabet = _string.ascii_letters + _string.digits + "-_=+@#%~"
+    _secret_key = "".join(_secrets.choice(_alphabet) for _ in range(50))
+
+    # ── Defaults for a complete desktop .env ──────────────────────────────────
+    _defaults = {
+        "DJANGO_SECRET_KEY":     _secret_key,
+        "DJANGO_DEBUG":          "False",
+        "DJANGO_ALLOWED_HOSTS":  "localhost,127.0.0.1",
+        "CORS_ALLOWED_ORIGINS":  "http://localhost:8000,http://127.0.0.1:8000",
+        "SYNC_CLOUD_URL":        "",
+        "SYNC_CLOUD_TOKEN":      "",
+        "CLOUD_SETUP_URL":       "https://popmyc-pos.onrender.com",
+        "POPMYC_CELERY_EAGER":   "True",
+    }
+
+    # Load existing file (if any)
+    existing: dict = {}
+    lines: list = []
+    if env_path.exists():
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                k, _, v = stripped.partition("=")
+                existing[k.strip()] = v.strip()
+
+    # Determine whether the file is complete enough to use as-is
+    _critical = {"DJANGO_SECRET_KEY", "DB_USER", "DB_PASSWORD", "DB_PORT", "DB_NAME"}
+    _missing_critical = _critical - set(existing.keys()) - set(updates.keys())
+    _file_missing = not env_path.exists()
+
+    if _file_missing or _missing_critical:
+        # Write a complete fresh .env — merge defaults + existing + updates
+        merged = {**_defaults, **existing, **updates}
+        timestamp = __import__("datetime").datetime.now().isoformat()
+        new_lines = [
+            f"# POPMYC POS Desktop Configuration\n",
+            f"# Generated automatically on first run — {timestamp}\n",
+            f"# DO NOT DELETE this file. It contains your database password.\n",
+            f"DB_NAME={merged.get('DB_NAME', 'popmyc_pos')}\n",
+            f"DB_USER={merged.get('DB_USER', 'popmyc_app')}\n",
+            f"DB_PASSWORD={merged.get('DB_PASSWORD', '')}\n",
+            f"DB_HOST={merged.get('DB_HOST', 'localhost')}\n",
+            f"DB_PORT={merged.get('DB_PORT', '5432')}\n",
+            f"\n",
+            f"DJANGO_SECRET_KEY={merged['DJANGO_SECRET_KEY']}\n",
+            f"DJANGO_DEBUG={merged['DJANGO_DEBUG']}\n",
+            f"DJANGO_ALLOWED_HOSTS={merged['DJANGO_ALLOWED_HOSTS']}\n",
+            f"\n",
+            f"CORS_ALLOWED_ORIGINS={merged['CORS_ALLOWED_ORIGINS']}\n",
+            f"SYNC_CLOUD_URL={merged['SYNC_CLOUD_URL']}\n",
+            f"SYNC_CLOUD_TOKEN={merged['SYNC_CLOUD_TOKEN']}\n",
+            f"\n",
+            f"# Cloud licensing service — used ONLY for first-run trial activation.\n",
+            f"# DO NOT CHANGE unless directed by POPMYC support.\n",
+            f"CLOUD_SETUP_URL={merged['CLOUD_SETUP_URL']}\n",
+            f"\n",
+            f"POPMYC_CELERY_EAGER={merged['POPMYC_CELERY_EAGER']}\n",
+        ]
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+        return
+
+    # File exists and is complete — just update the specified keys in-place
+    updated_keys: set = set()
     new_lines = []
     for line in lines:
         stripped = line.strip()
@@ -109,12 +183,11 @@ def _update_env(data_dir: str, updates: dict) -> None:
         else:
             new_lines.append(line)
 
-    # Add any keys that weren't already in the file
     for k, v in updates.items():
         if k not in updated_keys:
             new_lines.append(f"{k}={v}\n")
 
-    with open(env_path, "w") as f:
+    with open(env_path, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
 def _detect_pg_windows() -> dict:

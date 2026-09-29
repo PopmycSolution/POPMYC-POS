@@ -100,24 +100,9 @@ function getDataDir() {
 
 function ensureDataDir() {
   const d = getDataDir();
-  try {
-    fs.mkdirSync(d, { recursive: true });
-    ['logs', 'media', 'backups'].forEach(sub => {
-      try {
-        fs.mkdirSync(path.join(d, sub), { recursive: true });
-      } catch (subErr) {
-        // Log but do not crash — the directory may already exist or a
-        // permissions issue will be caught by the EPERM guard below.
-        console.warn(`[Desktop] Could not create ${sub}/ in data dir:`, subErr.message);
-      }
-    });
-  } catch (err) {
-    // On a fresh install the installer creates C:\ProgramData\POPMYC POS and
-    // sets the ACL.  If we still get EPERM here it means the installer hasn't
-    // run yet (dev mode) or the ACL grant failed.  Log the warning — the app
-    // will still work; service logs just won't go to the file.
-    console.warn('[Desktop] ensureDataDir EPERM — running without local log file:', err.message);
-  }
+  ['logs', 'media', 'backups'].forEach(sub =>
+    fs.mkdirSync(path.join(d, sub), { recursive: true })
+  );
   return d;
 }
 
@@ -388,25 +373,8 @@ const launchArgs = [launcherPath, '--port', String(BACKEND_PORT)];
   });
 
   const logPath   = path.join(dataDir, 'logs', 'backend.log');
-  // Guard: ensure logs/ directory exists before opening the write stream.
-  // On a customer PC, C:\ProgramData\POPMYC POS\logs\ is created by the
-  // installer (with correct ACLs), but create it here too as a safety net.
-  try {
-    fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-  } catch { /* already exists or no permission — handled below */ }
-
-  // Open the log file. If the directory is not writable (EPERM), fall back
-  // to a no-op stream so the backend process still starts — we just lose
-  // file logging for this session.  The service logs go to NSSM's files.
-  let logStream;
-  try {
-    logStream = fs.createWriteStream(logPath, { flags: 'a' });
-    logStream.write(`\n\n=== Backend started (child-process) ${new Date().toISOString()} ===\n`);
-  } catch (logErr) {
-    console.warn('[Desktop] Cannot open backend.log (EPERM or missing dir):', logErr.message);
-    // No-op stream — write() calls are silently discarded
-    logStream = { write: () => {}, end: () => {} };
-  }
+  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+  logStream.write(`\n\n=== Backend started (child-process) ${new Date().toISOString()} ===\n`);
 
   backendProcess.stdout.on('data', d => {
     logStream.write(d);

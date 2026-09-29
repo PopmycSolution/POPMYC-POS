@@ -3,6 +3,7 @@ businesses/admin.py
 ===================
 Enhanced Business admin for POPMYC POS cloud backend.
 Shows category, owner, branch count, license/trial status, and sync state.
+Includes inline user management so staff can add/reset users from the Business page.
 """
 
 from django.contrib import admin
@@ -12,6 +13,44 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from businesses.models import Business, BusinessSettings
+
+
+class BusinessUserInline(admin.TabularInline):
+    """
+    Manage all CustomUsers linked to this business directly from the Business
+    change page. Useful for cloud staff who need to add or reset users without
+    navigating to a separate page.
+    """
+    # model set below after imports resolve
+    fields = (
+        "username", "first_name", "last_name", "email",
+        "is_active", "is_staff", "is_superuser", "branch",
+    )
+    extra = 0
+    verbose_name = "User"
+    verbose_name_plural = "Users"
+    show_change_link = True
+    max_num = 50
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related("branch")
+
+
+class BusinessBranchInline(admin.TabularInline):
+    """Show all branches for this business inline."""
+    # model set below after imports resolve
+    fields = ("name", "code", "is_head_office", "is_active", "phone", "address")
+    extra = 0
+    show_change_link = True
+    max_num = 20
+
+
+# Resolve model references after imports
+from django.contrib.auth import get_user_model as _get_user_model  # noqa: E402
+from branches.models import Branch as _Branch  # noqa: E402
+BusinessUserInline.model   = _get_user_model()
+BusinessBranchInline.model = _Branch
 
 
 @admin.register(Business)
@@ -31,6 +70,7 @@ class BusinessAdmin(admin.ModelAdmin):
     search_fields = ("name", "address", "phone", "email", "tin")
     readonly_fields = ("id", "created_at", "updated_at", "branch_list_link")
     ordering = ("-created_at",)
+    inlines = [BusinessBranchInline, BusinessUserInline]
 
     fieldsets = (
         ("Identity", {

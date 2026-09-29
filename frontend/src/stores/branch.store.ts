@@ -19,34 +19,10 @@ function genId(): string {
   return `branch-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 function nowIso(): string { return new Date().toISOString(); }
-function daysAgo(d: number): string {
-  const dt = new Date(); dt.setDate(dt.getDate() - d); return dt.toISOString();
-}
 
 // ── Seed data — used on first run / after store wipe ─────────────────────────
-export const SEED_BRANCHES: Branch[] = [
-  {
-    id: 'branch-1', business: 'biz-1',
-    name: 'Main Branch', code: 'MAIN',
-    address: 'Accra Central, Greater Accra', phone: '0302000001',
-    isHeadOffice: true, isActive: true,
-    createdAt: daysAgo(400), updatedAt: daysAgo(10),
-  },
-  {
-    id: 'branch-2', business: 'biz-1',
-    name: 'Kumasi Branch', code: 'KSI',
-    address: 'Adum, Kumasi, Ashanti', phone: '0322000002',
-    isHeadOffice: false, isActive: true,
-    createdAt: daysAgo(300), updatedAt: daysAgo(5),
-  },
-  {
-    id: 'branch-3', business: 'biz-1',
-    name: 'Takoradi Branch', code: 'TADI',
-    address: 'Market Circle, Takoradi, Western', phone: '0312000003',
-    isHeadOffice: false, isActive: true,
-    createdAt: daysAgo(200), updatedAt: daysAgo(2),
-  },
-];
+// No seed branches — branches are loaded from the backend after login.
+export const SEED_BRANCHES: Branch[] = [];
 
 // ── Detect local/demo session (no real backend) ───────────────────────────────
 function isLocalSession(): boolean {
@@ -88,7 +64,7 @@ interface BranchStore {
 export const useBranchStore = create<BranchStore>()(
   persist(
     (set, get) => ({
-      branches:       SEED_BRANCHES,
+      branches:       [],
       activeBranchId: null,
       loading:        false,
       error:          null,

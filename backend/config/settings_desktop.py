@@ -18,8 +18,9 @@ What it changes over the base settings
 - STATIC_ROOT / STATICFILES_DIRS point to the packaged frontend dist/
 - ALLOWED_HOSTS restricted to localhost only (desktop never needs external hosts)
 - Data directory read from POPMYC_DATA_DIR env var (set by the launcher)
-  so logs, media, and backups land in %APPDATA%/POPMYC POS/ not in the
-  application install directory (which may be wiped on update)
+  so logs, media, and backups land in %PROGRAMDATA%/POPMYC POS/ (machine-wide,
+  accessible to both the Windows service running as LocalSystem and the Electron
+  desktop process running as the logged-in operator)
 - CORS is tightened (localhost:8000 only — frontend is served from Django)
 - Celery/Redis are made optional — the desktop sync works over HTTP without
   Celery; Celery tasks simply won't run if Redis is absent
@@ -47,7 +48,6 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 #   C:\ProgramData\POPMYC POS
 # This is the same directory the Windows service (LocalSystem) and the
 # Electron desktop process (logged-in operator) use — both can read/write it.
-#
 # Fallback cascade (mirrors service_launcher.py resolve_data_dir()):
 #   1. POPMYC_DATA_DIR env var  — explicit override
 #   2. %PROGRAMDATA%\POPMYC POS — machine-wide (production default)
@@ -55,8 +55,26 @@ ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 import os as _os
 _programdata = _os.environ.get("PROGRAMDATA") or _os.environ.get("ProgramData")
+
+# Build the data directory path.
+# Priority order (mirrors service_launcher.py resolve_data_dir()):
+#   1. POPMYC_DATA_DIR env var  — explicit override set by NSSM AppEnvironmentExtra
+#   2. %PROGRAMDATA%\POPMYC POS — machine-wide (production default for service + Electron)
+#   3. BASE_DIR/desktop_data    — developer fallback when no env is set
+#
+# GUARD: reject POPMYC_DATA_DIR values that don't end with "POPMYC POS" or
+# "POPMYC POS" (case-insensitive) — a previous NSSM bug could set it to a
+# truncated path like "C:\ProgramData\POPMYC" (space stripped) which would
+# create a wrong data directory.  In that case fall through to priority 2.
+_raw_data_dir = _os.environ.get("POPMYC_DATA_DIR", "").strip()
+_valid_data_dir = (
+    _raw_data_dir
+    if _raw_data_dir and _raw_data_dir.upper().endswith("POPMYC POS")
+    else ""
+)
+
 _DATA_DIR = Path(
-    _os.environ.get("POPMYC_DATA_DIR")
+    _valid_data_dir
     or (_programdata + "\\POPMYC POS" if _programdata else "")
     or str(BASE_DIR / "desktop_data")  # noqa: F405
 )

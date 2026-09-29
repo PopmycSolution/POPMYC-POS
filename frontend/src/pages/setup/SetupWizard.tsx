@@ -284,6 +284,29 @@ export default function SetupWizard() {
           // Ignore — retried on next startup via retryPendingCompletion()
         })
         .finally(() => {
+          // Clear stale localStorage data from any previous install.
+          // Electron preserves localStorage across uninstalls — a customer
+          // reinstalling on the same PC would otherwise see old seed data.
+          // Wipe all popmyc-* store keys so the new install starts fresh.
+          // Auth tokens are NOT cleared here — they will be absent anyway on
+          // a brand-new setup (the customer hasn't logged in yet).
+          const keysToWipe = [
+            'popmyc-products',
+            'popmyc-categories',
+            'popmyc-brands',
+            'popmyc-units',
+            'popmyc-customers',
+            'popmyc-sales',
+            'popmyc-expenses',
+            'popmyc-suppliers',
+            'popmyc-purchases',
+            'popmyc-inventory',
+            'popmyc-users',
+            'popmyc-settings',
+            'popmyc-debts',
+            'popmyc-branch-inventory',
+          ];
+          keysToWipe.forEach((k) => localStorage.removeItem(k));
           setLicState('success');
           setLicMessage('License activated! Redirecting to login…');
           setTimeout(() => navigate('/login', { replace: true }), 2200);
