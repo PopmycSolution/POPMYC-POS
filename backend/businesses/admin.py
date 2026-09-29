@@ -3,17 +3,39 @@ businesses/admin.py
 ===================
 Enhanced Business admin for POPMYC POS cloud backend.
 Shows category, owner, branch count, license/trial status, and sync state.
-Includes inline user management so staff can add/reset users from the Business page.
+Includes inline user/branch management for cloud staff.
 """
 
 from django.contrib import admin
+from django.contrib.auth import get_user_model
 from django.db.models import Count
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
+from branches.models import Branch
 from businesses.models import Business, BusinessSettings
 
+User = get_user_model()
+
+
+# ── Inline: Branches inside a Business ───────────────────────────────────────
+
+class BusinessBranchInline(admin.TabularInline):
+    """Show all branches for this business inline."""
+    model   = Branch
+    fields  = ("name", "code", "is_head_office", "is_active", "phone", "address")
+    extra   = 0
+    show_change_link = True
+    max_num = 20
+    verbose_name        = "Branch"
+    verbose_name_plural = "Branches"
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).order_by("-is_head_office", "name")
+
+
+# ── Inline: Users inside a Business ──────────────────────────────────────────
 
 class BusinessUserInline(admin.TabularInline):
     """
@@ -21,37 +43,24 @@ class BusinessUserInline(admin.TabularInline):
     change page. Useful for cloud staff who need to add or reset users without
     navigating to a separate page.
     """
-    # model set below after imports resolve
-    fields = (
+    model   = User
+    # Only show safe fields — password hash is never exposed
+    fields  = (
         "username", "first_name", "last_name", "email",
         "is_active", "is_staff", "is_superuser", "branch",
     )
-    extra = 0
-    verbose_name = "User"
-    verbose_name_plural = "Users"
+    readonly_fields = ()
+    extra   = 0
     show_change_link = True
     max_num = 50
+    verbose_name        = "User"
+    verbose_name_plural = "Users"
 
     def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        return qs.select_related("branch")
+        return super().get_queryset(request).select_related("branch")
 
 
-class BusinessBranchInline(admin.TabularInline):
-    """Show all branches for this business inline."""
-    # model set below after imports resolve
-    fields = ("name", "code", "is_head_office", "is_active", "phone", "address")
-    extra = 0
-    show_change_link = True
-    max_num = 20
-
-
-# Resolve model references after imports
-from django.contrib.auth import get_user_model as _get_user_model  # noqa: E402
-from branches.models import Branch as _Branch  # noqa: E402
-BusinessUserInline.model   = _get_user_model()
-BusinessBranchInline.model = _Branch
-
+# ── BusinessAdmin ─────────────────────────────────────────────────────────────
 
 @admin.register(Business)
 class BusinessAdmin(admin.ModelAdmin):
@@ -66,11 +75,11 @@ class BusinessAdmin(admin.ModelAdmin):
         "is_active",
         "created_at",
     )
-    list_filter  = ("business_category", "is_active", "currency", "subscription_tier", "created_at")
+    list_filter   = ("business_category", "is_active", "currency", "subscription_tier", "created_at")
     search_fields = ("name", "address", "phone", "email", "tin")
     readonly_fields = ("id", "created_at", "updated_at", "branch_list_link")
-    ordering = ("-created_at",)
-    inlines = [BusinessBranchInline, BusinessUserInline]
+    ordering  = ("-created_at",)
+    inlines   = [BusinessBranchInline, BusinessUserInline]
 
     fieldsets = (
         ("Identity", {
@@ -115,24 +124,28 @@ class BusinessAdmin(admin.ModelAdmin):
             "SERVICE":           "badge-gray",
         }
         cls   = colour_map.get(obj.business_category, "badge-gray")
-        label = obj.get_business_category_display() if hasattr(obj, "get_business_category_display") else obj.business_category
-        return format_html(
-            '<span class="badge {}">{}</span>',
-            cls, label,
+        label = (
+            obj.get_business_category_display()
+            if hasattr(obj, "get_business_category_display")
+            else obj.business_category
         )
+        return format_html('<span class="badge {}">{}</span>', cls, label)
 
     @admin.display(description="Branches", ordering="_branch_count")
     def branch_count(self, obj):
         count = getattr(obj, "_branch_count", 0)
         url   = reverse("admin:branches_branch_changelist") + f"?business__id__exact={obj.pk}"
-        return format_html('<a href="{}">{} branch{}</a>', url, count, "es" if count != 1 else "")
+        return format_html(
+            '<a href="{}">{} branch{}</a>',
+            url, count, "es" if count != 1 else "",
+        )
 
     @admin.display(description="License")
     def license_status(self, obj):
         try:
             lic = obj.license
             if lic.is_trial and lic.status == "ACTIVE":
-                dr = lic.days_remaining
+                dr    = lic.days_remaining
                 label = f"Trial ({dr}d)" if dr is not None else "Trial"
                 return format_html('<span class="badge badge-purple">{}</span>', label)
             colours = {
@@ -155,10 +168,12 @@ class BusinessAdmin(admin.ModelAdmin):
         return format_html('<a href="{}">View branches for {}</a>', url, obj.name)
 
 
+# ── BusinessSettingsAdmin ─────────────────────────────────────────────────────
+
 @admin.register(BusinessSettings)
 class BusinessSettingsAdmin(admin.ModelAdmin):
-    list_display   = ("business", "inventory_mode", "allow_cashier_price_negotiation", "updated_at")
-    list_filter    = ("inventory_mode", "allow_cashier_price_negotiation")
-    search_fields  = ("business__name",)
+    list_display    = ("business", "inventory_mode", "allow_cashier_price_negotiation", "updated_at")
+    list_filter     = ("inventory_mode", "allow_cashier_price_negotiation")
+    search_fields   = ("business__name",)
     readonly_fields = ("id", "created_at", "updated_at")
-    raw_id_fields  = ("business",)
+    raw_id_fields   = ("business",)
