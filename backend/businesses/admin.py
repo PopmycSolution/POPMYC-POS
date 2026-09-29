@@ -102,6 +102,7 @@ class BusinessAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at", "branch_list_link", "cloud_info")
     ordering  = ("-created_at",)
     inlines   = [BusinessBranchInline, BusinessUserInline]
+    actions   = ["action_fix_cloud_registration"]
 
     fieldsets = (
         ("Identity", {
@@ -271,6 +272,59 @@ class BusinessAdmin(admin.ModelAdmin):
             return mark_safe("<br>".join(lines))
         except Exception:
             return "—"
+
+
+    @admin.action(description="🔧 Fix cloud registration (create missing Branch, License, CloudProfile)")
+    def action_fix_cloud_registration(self, request, queryset):
+        from branches.models import Branch
+        from cloud.models import CloudBusinessProfile
+        from licensing.models import License
+        from django.utils import timezone
+        from datetime import date, timedelta
+
+        fixed = 0
+        for biz in queryset:
+            try:
+                # CloudBusinessProfile
+                profile, _ = CloudBusinessProfile.objects.get_or_create(
+                    business=biz,
+                    defaults={
+                        "cloud_status":        CloudBusinessProfile.CloudStatus.ACTIVE,
+                        "cloud_registered_at": timezone.now(),
+                    },
+                )
+                if profile.cloud_status != CloudBusinessProfile.CloudStatus.ACTIVE:
+                    profile.cloud_status = CloudBusinessProfile.CloudStatus.ACTIVE
+                    profile.save(update_fields=["cloud_status"])
+
+                # Branch
+                if not Branch.objects.filter(business=biz).exists():
+                    Branch.objects.create(
+                        business=biz,
+                        name="Main Branch",
+                        code="MAIN",
+                        is_head_office=True,
+                        is_active=True,
+                    )
+
+                # License
+                if not License.objects.filter(business=biz).exists():
+                    today = date.today()
+                    lic = License.objects.create(
+                        business=biz,
+                        license_type=License.LicenseType.TRIAL,
+                        status=License.Status.PENDING,
+                        start_date=today,
+                        expiry_date=today + timedelta(days=7),
+                        notes="Manually fixed from cloud admin.",
+                    )
+                    lic.activate()
+
+                fixed += 1
+            except Exception as exc:
+                self.message_user(request, f"Error fixing {biz.name}: {exc}", level="error")
+
+        self.message_user(request, f"✅ Fixed cloud registration for {fixed} business(es).")
 
 
 # ── BusinessSettingsAdmin ─────────────────────────────────────────────────────
