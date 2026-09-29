@@ -619,6 +619,58 @@ class BusinessRegistrationView(APIView):
             },
         )
 
+        # ── Create or update Branch stub on Render ────────────────────────────
+        # Mirror the head-office branch so the cloud admin shows branch info.
+        raw_branch_id = data.get("branch_id", "")
+        branch_name   = data.get("branch_name", "Main Branch")
+        branch_code   = data.get("branch_code", "MAIN")
+        if raw_branch_id:
+            try:
+                from branches.models import Branch
+                branch_uuid = _uuid.UUID(str(raw_branch_id))
+                Branch.objects.update_or_create(
+                    id=branch_uuid,
+                    defaults={
+                        "business":       business,
+                        "name":           branch_name[:100],
+                        "code":           branch_code[:20].upper(),
+                        "is_head_office": True,
+                        "is_active":      True,
+                        "phone":          data.get("phone", ""),
+                        "address":        data.get("address", ""),
+                    },
+                )
+            except Exception as _branch_exc:
+                logger.warning(
+                    "[BusinessReg] Could not create branch stub on cloud: %s",
+                    type(_branch_exc).__name__,
+                )
+
+        # ── Create a TRIAL License stub on Render ─────────────────────────────
+        # This makes the cloud dashboard show active trials correctly.
+        # We create it only if no license exists yet for this business.
+        try:
+            from licensing.models import License
+            from datetime import date, timedelta
+            if not License.objects.filter(business=business).exists():
+                today  = date.today()
+                expiry = today + timedelta(days=7)
+                lic = License.objects.create(
+                    business     = business,
+                    license_type = License.LicenseType.TRIAL,
+                    status       = License.Status.PENDING,
+                    start_date   = today,
+                    expiry_date  = expiry,
+                    notes        = "Auto-created on cloud registration from desktop setup.",
+                )
+                # Activate it
+                lic.activate()
+        except Exception as _lic_exc:
+            logger.warning(
+                "[BusinessReg] Could not create license stub on cloud: %s",
+                type(_lic_exc).__name__,
+            )
+
         # ── Create or update CloudBusinessProfile ─────────────────────────────
         profile, _ = CloudBusinessProfile.objects.update_or_create(
             business=business,

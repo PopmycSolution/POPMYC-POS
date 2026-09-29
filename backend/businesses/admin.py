@@ -2,11 +2,15 @@
 businesses/admin.py
 ===================
 Enhanced Business admin for POPMYC POS cloud backend.
-Shows category, owner, branch count, license/trial status, and sync state.
-Includes inline user/branch management for cloud staff.
 
 Defensive: every display method wraps DB access in try/except so a missing
 column or unexpected schema state never causes a 500 on the changelist.
+
+NOTE on data architecture:
+  - Products, sales, customers, transactions LIVE ON THE CUSTOMER'S LOCAL PC.
+  - This cloud admin shows: Business, Branch, License, CloudProfile records
+    that were synced here during the customer's Setup Wizard.
+  - The inline sections show users and branches that were registered here.
 """
 
 from django.contrib import admin
@@ -25,7 +29,7 @@ User = get_user_model()
 # ── Inline: Branches inside a Business ───────────────────────────────────────
 
 class BusinessBranchInline(admin.TabularInline):
-    """Show all branches for this business inline."""
+    """Branches registered for this business."""
     model   = Branch
     fields  = ("name", "code", "is_head_office", "is_active", "phone", "address")
     readonly_fields = ("name", "code", "is_head_office", "is_active", "phone", "address")
@@ -47,12 +51,11 @@ class BusinessBranchInline(admin.TabularInline):
 
 class BusinessUserInline(admin.TabularInline):
     """
-    Manage all CustomUsers linked to this business directly from the Business
-    change page. Useful for cloud staff who need to add or reset users without
-    navigating to a separate page.
+    Users registered for this business.
+    NOTE: Only users whose accounts were synced to the cloud appear here.
+    All POS staff accounts live on the customer's local PC.
     """
     model   = User
-    # All fields read-only to avoid FK dropdown queries that can fail on Render
     fields  = (
         "username", "first_name", "last_name", "email",
         "is_active", "is_staff", "is_superuser",
@@ -66,7 +69,7 @@ class BusinessUserInline(admin.TabularInline):
     show_change_link = True
     max_num = 50
     verbose_name        = "User"
-    verbose_name_plural = "Users"
+    verbose_name_plural = "Users (cloud-synced)"
 
     def get_queryset(self, request):
         return super().get_queryset(request).only(
@@ -89,13 +92,14 @@ class BusinessAdmin(admin.ModelAdmin):
         "owner_display",
         "branch_count",
         "license_status",
+        "cloud_status_badge",
         "currency",
         "is_active",
         "created_at",
     )
     list_filter   = ("business_category", "is_active", "currency", "created_at")
     search_fields = ("name", "address", "phone", "email", "tin")
-    readonly_fields = ("id", "created_at", "updated_at", "branch_list_link")
+    readonly_fields = ("id", "created_at", "updated_at", "branch_list_link", "cloud_info")
     ordering  = ("-created_at",)
     inlines   = [BusinessBranchInline, BusinessUserInline]
 
@@ -115,8 +119,16 @@ class BusinessAdmin(admin.ModelAdmin):
         ("Branding", {
             "fields": ("logo",),
         }),
-        ("Branches", {
+        ("Branch Links", {
             "fields": ("branch_list_link",),
+        }),
+        ("Cloud Registration", {
+            "fields": ("cloud_info",),
+            "description": (
+                "ℹ️  Products, sales, customers and transactions are stored on "
+                "the customer's local PC — they are not synced to this cloud database. "
+                "Only the business registration, branches and license info appear here."
+            ),
         }),
         ("Timestamps", {
             "fields": ("created_at", "updated_at"),
@@ -172,7 +184,7 @@ class BusinessAdmin(admin.ModelAdmin):
                 count = Branch.objects.filter(business=obj).count()
             try:
                 url = reverse("admin:branches_branch_changelist") + f"?business__id__exact={obj.pk}"
-                return format_html('<a href="{}">{} branch{}</a>', url, count, "es" if count != 1 else "")
+                return format_html('<a href="{}">{}</a>', url, count)
             except NoReverseMatch:
                 return str(count)
         except Exception:
@@ -198,13 +210,65 @@ class BusinessAdmin(admin.ModelAdmin):
         except Exception:
             return mark_safe('<span class="badge badge-gray">No license</span>')
 
+    @admin.display(description="Cloud")
+    def cloud_status_badge(self, obj):
+        try:
+            profile = obj.cloudBusinessProfile
+            colours = {
+                "ACTIVE":    "badge-green",
+                "PENDING":   "badge-gray",
+                "SUSPENDED": "badge-amber",
+                "CLOSED":    "badge-red",
+            }
+            cls = colours.get(profile.cloud_status, "badge-gray")
+            return format_html('<span class="badge {}">{}</span>', cls, profile.cloud_status)
+        except Exception:
+            return mark_safe('<span class="badge badge-gray">Not registered</span>')
+
     @admin.display(description="Branches (links)")
     def branch_list_link(self, obj):
         try:
             if not obj.pk:
                 return "—"
             url = reverse("admin:branches_branch_changelist") + f"?business__id__exact={obj.pk}"
-            return format_html('<a href="{}">View branches for {}</a>', url, obj.name)
+            count = Branch.objects.filter(business=obj).count()
+            return format_html(
+                '<a href="{}">{} branch{} →</a>',
+                url, count, "es" if count != 1 else ""
+            )
+        except Exception:
+            return "—"
+
+    @admin.display(description="Cloud Registration Info")
+    def cloud_info(self, obj):
+        try:
+            lines = []
+            # Cloud profile
+            try:
+                profile = obj.cloudBusinessProfile
+                lines.append(f"<strong>Cloud Status:</strong> {profile.cloud_status}")
+                if profile.cloud_registered_at:
+                    lines.append(f"<strong>Registered:</strong> {profile.cloud_registered_at.strftime('%Y-%m-%d %H:%M')}")
+            except Exception:
+                lines.append("<strong>Cloud Status:</strong> Not registered on cloud yet")
+
+            # License
+            try:
+                lic = obj.license
+                lines.append(f"<strong>License Type:</strong> {lic.license_type}")
+                lines.append(f"<strong>License Status:</strong> {lic.status}")
+                if lic.expiry_date:
+                    lines.append(f"<strong>Expires:</strong> {lic.expiry_date}")
+            except Exception:
+                lines.append("<strong>License:</strong> None on cloud")
+
+            # Note about local data
+            lines.append(
+                "<br><em>ℹ️ Products, sales, customers and inventory are stored on "
+                "the customer's local PC and are not visible here.</em>"
+            )
+
+            return mark_safe("<br>".join(lines))
         except Exception:
             return "—"
 
