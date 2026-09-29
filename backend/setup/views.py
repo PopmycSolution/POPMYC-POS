@@ -612,6 +612,7 @@ class SetupRunView(APIView):
                 business=business,
                 branch=branch,
                 cloud_token=cloud_token,
+                admin_user=admin_user,
             )
         except Exception as _cloud_exc:
             # Never fail local setup because of a cloud registration error

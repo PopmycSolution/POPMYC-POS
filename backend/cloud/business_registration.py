@@ -48,6 +48,7 @@ def register_business_with_cloud(
     business: "Business",
     branch: "Branch",
     cloud_token: str = "",
+    admin_user=None,
 ) -> bool:
     """
     Post the newly-created Business + Branch to the Render cloud backend.
@@ -60,6 +61,8 @@ def register_business_with_cloud(
         branch:      The head-office Branch created alongside the business.
         cloud_token: Optional cloud ActivationReservation token (from trial
                      setup flow) — included for idempotency on the cloud side.
+        admin_user:  Optional CustomUser (the admin created during setup) so
+                     the cloud admin can show and manage the business owner.
     """
     cloud_url = getattr(settings, "CLOUD_SETUP_URL", "").rstrip("/")
     if not cloud_url:
@@ -71,6 +74,20 @@ def register_business_with_cloud(
         return False
 
     endpoint = cloud_url + REGISTER_ENDPOINT
+
+    # Admin user info — only safe public fields, never password
+    admin_info = {}
+    if admin_user is not None:
+        try:
+            admin_info = {
+                "admin_id":         str(admin_user.id),
+                "admin_username":   admin_user.username,
+                "admin_email":      admin_user.email or "",
+                "admin_first_name": admin_user.first_name or "",
+                "admin_last_name":  admin_user.last_name or "",
+            }
+        except Exception:
+            pass  # non-fatal — user info is best-effort
 
     payload = json.dumps({
         "business_id":        str(business.id),
@@ -85,6 +102,7 @@ def register_business_with_cloud(
         "branch_name":        branch.name,
         "branch_code":        branch.code,
         "cloud_token_prefix": cloud_token[:8] + "…" if cloud_token else "",
+        **admin_info,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -188,6 +206,7 @@ def sync_business_to_cloud(
     business: "Business",
     branch: "Branch",
     cloud_token: str = "",
+    admin_user=None,
 ) -> None:
     """
     Top-level entry point called from SetupRunView after successful setup.
@@ -199,7 +218,7 @@ def sync_business_to_cloud(
     This function never raises.
     """
     # Layer 1: immediate push
-    pushed = register_business_with_cloud(business, branch, cloud_token)
+    pushed = register_business_with_cloud(business, branch, cloud_token, admin_user=admin_user)
     if not pushed:
         logger.info(
             "[CloudReg] Immediate push skipped or failed — "

@@ -680,6 +680,77 @@ class BusinessRegistrationView(APIView):
             },
         )
 
+        # ── Sync admin user to Render ──────────────────────────────────────────
+        # Create/update the business admin user on the cloud so you can see
+        # and manage them from the Render admin without needing shell access.
+        # Only safe public fields are stored — password is NEVER sent or stored.
+        raw_admin_id       = data.get("admin_id", "")
+        admin_username     = data.get("admin_username", "")
+        admin_email        = data.get("admin_email", "")
+        admin_first_name   = data.get("admin_first_name", "")
+        admin_last_name    = data.get("admin_last_name", "")
+
+        if admin_username:
+            try:
+                from django.contrib.auth import get_user_model
+                import uuid as _uuid2
+                User = get_user_model()
+
+                # Build defaults — use unusable password (never usable for login)
+                user_defaults = {
+                    "email":        admin_email,
+                    "first_name":   admin_first_name,
+                    "last_name":    admin_last_name,
+                    "is_active":    True,
+                    "is_staff":     True,
+                    "is_superuser": True,
+                    "business":     business,
+                }
+
+                # Try by UUID first (most precise), fall back to username
+                cloud_user = None
+                if raw_admin_id:
+                    try:
+                        admin_uuid = _uuid2.UUID(str(raw_admin_id))
+                        cloud_user, u_created = User.objects.get_or_create(
+                            id=admin_uuid,
+                            defaults={"username": admin_username, **user_defaults},
+                        )
+                        if not u_created:
+                            for k, v in user_defaults.items():
+                                setattr(cloud_user, k, v)
+                            cloud_user.save()
+                    except Exception:
+                        pass
+
+                if cloud_user is None:
+                    cloud_user, u_created = User.objects.get_or_create(
+                        username=admin_username,
+                        defaults=user_defaults,
+                    )
+                    if not u_created:
+                        for k, v in user_defaults.items():
+                            setattr(cloud_user, k, v)
+                        cloud_user.save()
+
+                # Set unusable password so the account exists but can't log in
+                # locally (login must go through the cloud auth flow, not here)
+                if not cloud_user.has_usable_password() is False:
+                    cloud_user.set_unusable_password()
+                    cloud_user.save(update_fields=["password"])
+
+                logger.info(
+                    "[BusinessReg] Admin user synced to cloud. "
+                    "business_id=%s username=%s",
+                    business.id,
+                    admin_username,
+                )
+            except Exception as _user_exc:
+                logger.warning(
+                    "[BusinessReg] Could not sync admin user to cloud: %s",
+                    type(_user_exc).__name__,
+                )
+
         logger.info(
             "[BusinessReg] Business registered/updated from desktop. "
             "business_id=%s name=%r branch_id=%s created=%s",
