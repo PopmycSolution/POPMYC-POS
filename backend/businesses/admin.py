@@ -214,7 +214,8 @@ class BusinessAdmin(admin.ModelAdmin):
     @admin.display(description="Cloud")
     def cloud_status_badge(self, obj):
         try:
-            profile = obj.cloudBusinessProfile
+            # related_name on CloudBusinessProfile.business is "cloud_profile"
+            profile = obj.cloud_profile
             colours = {
                 "ACTIVE":    "badge-green",
                 "PENDING":   "badge-gray",
@@ -246,7 +247,7 @@ class BusinessAdmin(admin.ModelAdmin):
             lines = []
             # Cloud profile
             try:
-                profile = obj.cloudBusinessProfile
+                profile = obj.cloud_profile
                 lines.append(f"<strong>Cloud Status:</strong> {profile.cloud_status}")
                 if profile.cloud_registered_at:
                     lines.append(f"<strong>Registered:</strong> {profile.cloud_registered_at.strftime('%Y-%m-%d %H:%M')}")
