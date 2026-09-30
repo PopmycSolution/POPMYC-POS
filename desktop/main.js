@@ -38,7 +38,7 @@ const BACKEND_PORT    = parseInt(process.env.POPMYC_PORT || '8000', 10);
 const BACKEND_HOST    = '127.0.0.1';
 const BACKEND_URL     = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const HEALTH_URL      = `${BACKEND_URL}/api/v1/health/`;
-const HEALTH_TIMEOUT  = 120;   // seconds
+const HEALTH_TIMEOUT  = 180;   // seconds — generous timeout for cold-start migrations on slow hardware
 const HEALTH_INTERVAL = 1000;  // ms
 const IS_DEV          = process.argv.includes('--dev') || !app.isPackaged;
 
@@ -331,6 +331,12 @@ async function startBackend(dataDir) {
         if (startResult.ok) {
           usingWindowsService = true;
           backendStarted = true;
+          // Give the service a moment to begin its Python startup before
+          // waitForBackend() starts the countdown. Without this pause,
+          // the 180-second health-poll clock starts while the service is
+          // still in START_PENDING — wasting precious seconds.
+          console.log('[Desktop] Service start initiated — waiting 5s for Python to initialise …');
+          await new Promise(r => setTimeout(r, 5000));
           return;
         }
         console.warn('[Desktop] Service start failed:', startResult.message, '— falling back to child-process mode');
@@ -341,6 +347,7 @@ async function startBackend(dataDir) {
         console.log('[Desktop] POPMYCBackend service is starting — waiting …');
         usingWindowsService = true;
         backendStarted = true;
+        await new Promise(r => setTimeout(r, 3000));
         return;
       }
 

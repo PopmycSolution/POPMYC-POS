@@ -288,8 +288,8 @@ async function installService({ appDir, dataDir }) {
     ['set', SERVICE_NAME, 'AppRotateOnline',   '1'],
     // Restart behaviour — wait 5 s before restarting on crash
     ['set', SERVICE_NAME, 'AppRestartDelay',   '5000'],
-    // Throttle — if it crashes faster than 1.5 s, consider it a fail-loop
-    ['set', SERVICE_NAME, 'AppThrottle',       '1500'],
+    // Throttle — if it crashes faster than 3 s, consider it a fail-loop
+    ['set', SERVICE_NAME, 'AppThrottle',       '3000'],
     // Stop method — send Ctrl+C first, then WM_CLOSE, then kill after 10 s
     ['set', SERVICE_NAME, 'AppStopMethodConsole',  '5000'],
     ['set', SERVICE_NAME, 'AppStopMethodWindow',   '5000'],
@@ -298,8 +298,6 @@ async function installService({ appDir, dataDir }) {
     ['set', SERVICE_NAME, 'Start', 'SERVICE_AUTO_START'],
     // Type — run as a standard service (not interactive)
     ['set', SERVICE_NAME, 'Type', 'SERVICE_WIN32_OWN_PROCESS'],
-    // Delay auto-start by 10 s to let PostgreSQL start first
-    ['set', SERVICE_NAME, 'AppThrottle', '10000'],
   ];
 
   for (const args of settings) {
