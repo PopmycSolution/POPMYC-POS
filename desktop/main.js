@@ -42,10 +42,22 @@ const HEALTH_TIMEOUT  = 180;   // seconds — generous timeout for cold-start mi
 const HEALTH_INTERVAL = 1000;  // ms
 const IS_DEV          = process.argv.includes('--dev') || !app.isPackaged;
 
-// Update feed URL — configure before production distribution.
-// Set POPMYC_UPDATE_URL environment variable or edit this constant.
-// For GitHub releases: 'https://github.com/popmyc/pos/releases/latest/download'
-const UPDATE_FEED_URL = process.env.POPMYC_UPDATE_URL || '';
+// Auto-update feed URL.
+// Points to GitHub Releases for the PopmycSolution/POPMYC-POS repository.
+// electron-updater reads latest.yml / latest-beta.yml from this URL to
+// determine if a newer version is available.
+//
+// Channel logic:
+//   - Production builds use 'latest' channel  → customers get stable releases
+//   - Beta builds use 'beta' channel           → dev/test only, customers unaffected
+//
+// POPMYC_UPDATE_CHANNEL env var overrides the channel (set in dev to 'beta').
+// POPMYC_UPDATE_URL env var overrides the entire URL (for custom servers).
+const _GH_OWNER   = 'PopmycSolution';
+const _GH_REPO    = 'POPMYC-POS';
+const _UPDATE_CHANNEL = process.env.POPMYC_UPDATE_CHANNEL || 'latest';
+const UPDATE_FEED_URL = process.env.POPMYC_UPDATE_URL ||
+  `https://github.com/${_GH_OWNER}/${_GH_REPO}/releases/latest/download`;
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -556,9 +568,11 @@ async function checkForUpdates() {
 
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = false;
+    autoUpdater.autoDownload    = false;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.setFeedURL(UPDATE_FEED_URL);
+    autoUpdater.channel         = _UPDATE_CHANNEL;   // 'latest' or 'beta'
+    autoUpdater.allowPrerelease = (_UPDATE_CHANNEL === 'beta');
+    autoUpdater.setFeedURL({ provider: 'github', owner: _GH_OWNER, repo: _GH_REPO, channel: _UPDATE_CHANNEL });
 
     autoUpdater.removeAllListeners();
 

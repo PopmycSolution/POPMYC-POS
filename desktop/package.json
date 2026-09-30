@@ -14,7 +14,9 @@
     "build:dir": "node scripts/copy-frontend.js && npx electron-builder --win --x64 --dir",
     "pack": "node scripts/copy-frontend.js && npx electron-builder --dir",
     "build:unpacked": "node scripts/copy-frontend.js && npx electron-builder --win --x64 --dir",
-    "build:installer": "node scripts/build-installer.js"
+    "build:installer": "node scripts/build-installer.js",
+    "publish:beta": "node scripts/publish-release.js --channel beta",
+    "publish:stable": "node scripts/publish-release.js --channel stable"
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.0",
@@ -104,9 +106,10 @@
       "deleteAppDataOnUninstall": false
     },
     "publish": {
-      "provider": "generic",
-      "url": "https://releases.popmycsolutions.com/popmyc-pos/",
-      "channel": "latest"
+      "provider": "github",
+      "owner": "PopmycSolution",
+      "repo": "POPMYC-POS",
+      "releaseType": "release"
     }
   }
 }
