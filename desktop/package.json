@@ -1,6 +1,6 @@
 {
   "name": "popmyc-pos-desktop",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "POPMYC POS Desktop Application",
   "author": "POPMyC Solutions <popmychubsolution@gmail.com>",
   "main": "main.js",
@@ -34,14 +34,14 @@
       "output": "dist-installer",
       "buildResources": "resources"
     },
-  "files": [
-  "main.js",
-  "preload.js",
-  "service-manager.js",
-  "splash.html",
-  "db-setup.html",
-  "resources/**/*"
-],
+    "files": [
+      "main.js",
+      "preload.js",
+      "service-manager.js",
+      "splash.html",
+      "db-setup.html",
+      "resources/**/*"
+    ],
     "extraResources": [
       {
         "from": "../backend",
@@ -78,23 +78,23 @@
         ]
       }
     ],
-   "win": {
-  "target": [
-    {
-      "target": "nsis",
-      "arch": [
-        "x64"
-      ]
-    }
-  ],
-  "icon": "resources/icon.ico",
-  "signtoolOptions": {
-    "publisherName": "POPMyC Solutions",
-    "signingHashAlgorithms": [
-      "sha256"
-    ]
-  }
-},
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico",
+      "signtoolOptions": {
+        "publisherName": "POPMyC Solutions",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
