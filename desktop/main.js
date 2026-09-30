@@ -568,7 +568,7 @@ async function checkForUpdates() {
 
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload    = false;
+    autoUpdater.autoDownload    = true;   // download automatically; notify user when ready
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.channel         = _UPDATE_CHANNEL;   // 'latest' or 'beta'
     autoUpdater.allowPrerelease = (_UPDATE_CHANNEL === 'beta');

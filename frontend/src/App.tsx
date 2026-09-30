@@ -35,6 +35,7 @@ import { APP_NAME } from '@/utils/constants';
 import { Home, ArrowLeft } from 'lucide-react';
 import { fetchSetupStatus } from '@/services/setup.service';
 import { retryPendingCompletion } from '@/services/cloudLicense.service';
+import UpdateToast from '@/components/updater/UpdateToast';
 
 // ── Setup guard — checks first-run state once on cold start ───────────────────
 function SetupGuard({ children }: { children: ReactNode }) {
@@ -189,7 +190,10 @@ export function App() {
   }, []); // empty deps — run exactly once on mount
 
   return (
-    <Routes>
+    <>
+      {/* Global auto-update toast — shown on every page when an update is available */}
+      <UpdateToast />
+      <Routes>
       {/* DB setup screen — shown by Electron when PostgreSQL/DB is missing */}
       <Route path="/db-setup" element={<DbSetupScreen />} />
 
@@ -257,6 +261,7 @@ export function App() {
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </>
   );
 }
 
