@@ -19,6 +19,19 @@ const ROOT    = path.join(__dirname, '..');          // desktop/
 const UNPACKED = path.join(ROOT, 'dist-installer', 'win-unpacked');
 const ISS      = path.join(ROOT, 'installer', 'popmyc-setup.iss');
 
+// ── Sync version from package.json into the ISS file ─────────────────────────
+// This ensures POPMYC-POS-Setup-{version}.exe always matches package.json.
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const issContent  = fs.readFileSync(ISS, 'utf8');
+const issUpdated  = issContent.replace(
+  /^#define AppVersion\s+"[^"]*"/m,
+  `#define AppVersion    "${PKG_VERSION}"`
+);
+if (issContent !== issUpdated) {
+  fs.writeFileSync(ISS, issUpdated, 'utf8');
+  console.log(`ℹ️   ISS version patched to ${PKG_VERSION}`);
+}
+
 // Required files inside win-unpacked
 const REQUIRED_IN_UNPACKED = [
   'POPMYC POS.exe',
@@ -180,7 +193,7 @@ if (result.status !== 0) {
 
 // ── 6. Verify output ──────────────────────────────────────────────────────────
 const outputDir  = path.join(ROOT, 'installer');
-const installerExe = path.join(outputDir, 'POPMYC-POS-Setup-1.0.0.exe');
+const installerExe = path.join(outputDir, `POPMYC-POS-Setup-${PKG_VERSION}.exe`);
 
 if (!fs.existsSync(installerExe)) {
   // Also check with spaces (older naming)
