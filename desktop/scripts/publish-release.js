@@ -1,47 +1,29 @@
 /**
  * publish-release.js
  * ==================
- * Publishes a new POPMYC POS release to GitHub Releases.
+ * Publishes a POPMYC POS release to GitHub Releases using the GitHub REST API.
+ * No gh CLI, no external dependencies — uses Node.js built-in https module.
  *
  * Usage:
- *   node scripts/publish-release.js --channel stable   (customers get this)
- *   node scripts/publish-release.js --channel beta     (dev testing only)
+ *   node scripts/publish-release.js --channel beta    (test on dev PC only)
+ *   node scripts/publish-release.js --channel stable  (customers auto-update)
  *
  * Requirements:
- *   - Set GH_TOKEN environment variable to a GitHub Personal Access Token
- *     with "Contents" write permission on the PopmycSolution/POPMYC-POS repo.
- *   - The installer must already be built:
- *       npm run build:unpacked  (then node scripts/build-installer.js)
- *
- * What it does:
- *   1. Reads the current version from package.json
- *   2. Creates a GitHub Release tagged v{version} (or v{version}-beta.N)
- *   3. Uploads the .exe installer as a release asset
- *   4. Uploads latest.yml (or latest-beta.yml) so electron-updater can
- *      detect the new version on customer PCs
- *
- * Channel separation:
- *   stable channel → tagged as v1.0.0    → customers auto-update
- *   beta   channel → tagged as v1.0.0-beta.1 → only beta testers update
- *
- * IMPORTANT:
- *   - Never publish to 'stable' until you have tested on 'beta' first.
- *   - beta releases are marked as GitHub "pre-release" — customers on the
- *     stable channel will never see them.
+ *   Set GH_TOKEN environment variable before running:
+ *     $env:GH_TOKEN = "ghp_yourTokenHere"
  */
 
 'use strict';
 
-const { execSync, spawnSync } = require('child_process');
-const fs   = require('fs');
-const path = require('path');
+const https  = require('https');
+const fs     = require('fs');
+const path   = require('path');
 
 // ── Parse arguments ────────────────────────────────────────────────────────────
 const args    = process.argv.slice(2);
 const channel = (() => {
   const idx = args.indexOf('--channel');
-  if (idx !== -1 && args[idx + 1]) return args[idx + 1];
-  return 'beta';   // default to beta for safety
+  return (idx !== -1 && args[idx + 1]) ? args[idx + 1] : 'beta';
 })();
 
 if (!['stable', 'beta'].includes(channel)) {
@@ -60,16 +42,16 @@ const GH_TOKEN  = process.env.GH_TOKEN || '';
 const INSTALLER_DIR = path.join(ROOT, 'installer');
 const INSTALLER_EXE = path.join(INSTALLER_DIR, `POPMYC-POS-Setup-${VERSION}.exe`);
 
-// ── Validate prerequisites ─────────────────────────────────────────────────────
+// ── Validate ───────────────────────────────────────────────────────────────────
 if (!GH_TOKEN) {
   console.error(`
-❌  GH_TOKEN environment variable is not set.
+❌  GH_TOKEN is not set.
 
-To set it:
+Run this first:
   $env:GH_TOKEN = "ghp_yourPersonalAccessToken"
 
-Create a token at: https://github.com/settings/tokens
-Required permissions: Contents (read/write) on PopmycSolution/POPMYC-POS
+Create token at: https://github.com/settings/tokens
+Required: repo scope (full)
 `);
   process.exit(1);
 }
@@ -79,30 +61,16 @@ if (!fs.existsSync(INSTALLER_EXE)) {
   process.exit(1);
 }
 
-// ── Determine tag name ─────────────────────────────────────────────────────────
-let tagName, releaseName, prerelease;
-if (channel === 'stable') {
-  tagName     = `v${VERSION}`;
-  releaseName = `POPMYC POS v${VERSION}`;
-  prerelease  = false;
-} else {
-  // beta: find next beta number for this version
-  let betaNum = 1;
-  try {
-    const tags = execSync(
-      `gh release list --repo ${GH_OWNER}/${GH_REPO} --limit 20`,
-      { encoding: 'utf8', env: { ...process.env, GH_TOKEN } }
-    );
-    const betaMatches = tags.match(new RegExp(`v${VERSION}-beta\\.(\\d+)`, 'g')) || [];
-    if (betaMatches.length > 0) {
-      const nums = betaMatches.map(t => parseInt(t.split('.').pop()));
-      betaNum = Math.max(...nums) + 1;
-    }
-  } catch { /* gh CLI not installed or no releases yet — use 1 */ }
-  tagName     = `v${VERSION}-beta.${betaNum}`;
-  releaseName = `POPMYC POS v${VERSION} Beta ${betaNum}`;
-  prerelease  = true;
-}
+// ── Determine release details ──────────────────────────────────────────────────
+const isStable  = channel === 'stable';
+const tagName   = isStable ? `v${VERSION}` : `v${VERSION}-beta.1`;
+const relName   = isStable ? `POPMYC POS v${VERSION}` : `POPMYC POS v${VERSION} Beta 1`;
+const prerel    = !isStable;
+const body      = isStable
+  ? `## POPMYC POS v${VERSION}\n\nStable release. All customers will auto-update within 4 hours.`
+  : `## POPMYC POS v${VERSION} Beta\n\n⚠️ BETA — For internal testing only. Do NOT share with customers.`;
+
+const installerSize = (fs.statSync(INSTALLER_EXE).size / (1024 * 1024)).toFixed(1);
 
 console.log(`
 ╔══════════════════════════════════════════════════════╗
@@ -112,80 +80,175 @@ console.log(`
   Version  : ${VERSION}
   Channel  : ${channel.toUpperCase()}
   Tag      : ${tagName}
-  Pre-rel  : ${prerelease}
-  Installer: ${path.basename(INSTALLER_EXE)} (${(fs.statSync(INSTALLER_EXE).size / (1024*1024)).toFixed(1)} MB)
+  Pre-rel  : ${prerel}
+  Installer: ${path.basename(INSTALLER_EXE)} (${installerSize} MB)
   Repo     : https://github.com/${GH_OWNER}/${GH_REPO}
 `);
 
-// ── Use electron-builder publish ───────────────────────────────────────────────
-// electron-builder handles creating the GitHub release, uploading the exe,
-// and generating latest.yml / latest-beta.yml automatically.
-// We set GH_TOKEN in the environment and let it do the work.
+// ── GitHub API helpers ─────────────────────────────────────────────────────────
 
-const publishChannel = channel === 'stable' ? 'latest' : 'beta';
+function githubRequest(method, path_, body_, extraHeaders) {
+  return new Promise((resolve, reject) => {
+    const data   = body_ ? (typeof body_ === 'string' ? body_ : JSON.stringify(body_)) : null;
+    const isJson = extraHeaders && extraHeaders['Content-Type'] === 'application/octet-stream' ? false : true;
 
-console.log(`📤  Publishing via electron-builder to GitHub (channel: ${publishChannel})…\n`);
+    const opts = {
+      hostname: 'api.github.com',
+      path:     path_,
+      method:   method,
+      headers: {
+        'Authorization': `Bearer ${GH_TOKEN}`,
+        'Accept':        'application/vnd.github+json',
+        'User-Agent':    'POPMYC-POS-Publisher/1.0',
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(data && isJson  ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}),
+        ...(data && !isJson ? extraHeaders : {}),
+        ...((!data && !isJson) ? extraHeaders || {} : {}),
+      },
+    };
 
-const result = spawnSync(
-  'npx',
-  [
-    'electron-builder',
-    '--win', '--x64',
-    '--publish', 'always',
-    `-c.publish.channel=${publishChannel}`,
-    `-c.publish.prerelease=${prerelease}`,
-    // Don't rebuild — just publish what's already in dist-installer/
-    '--prepackaged', path.join(ROOT, 'dist-installer', 'win-unpacked'),
-  ],
-  {
-    cwd: ROOT,
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      GH_TOKEN,
-      // Tell electron-builder not to sign (we don't have a cert)
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-    },
-  }
-);
+    const req = https.request(opts, (res) => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(raw), headers: res.headers }); }
+        catch { resolve({ status: res.statusCode, body: raw, headers: res.headers }); }
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
 
-if (result.status !== 0) {
-  // Fallback: use gh CLI directly if electron-builder publish fails
-  console.warn('\n⚠️  electron-builder publish failed. Trying gh CLI fallback…\n');
+function uploadAsset(uploadUrl, filePath, token) {
+  // uploadUrl is like: https://uploads.github.com/repos/.../releases/123/assets{?name,label}
+  const base = uploadUrl.replace(/\{.*\}/, '');
+  const name = path.basename(filePath);
+  const url  = new URL(base);
+  url.searchParams.set('name', name);
 
-  try {
-    const notes = channel === 'stable'
-      ? `POPMYC POS ${tagName} — stable release.\n\nInstall or update from: POPMYC-POS-Setup-${VERSION}.exe`
-      : `POPMYC POS ${tagName} — BETA testing only.\n\nDo NOT distribute to customers. For internal testing only.`;
+  return new Promise((resolve, reject) => {
+    const fileSize = fs.statSync(filePath).size;
+    const fileStream = fs.createReadStream(filePath);
 
-    execSync(
-      `gh release create ${tagName} "${INSTALLER_EXE}" ` +
-      `--title "${releaseName}" ` +
-      `--notes "${notes}" ` +
-      `${prerelease ? '--prerelease' : ''} ` +
-      `--repo ${GH_OWNER}/${GH_REPO}`,
-      {
-        cwd: ROOT,
-        stdio: 'inherit',
-        env: { ...process.env, GH_TOKEN },
-      }
-    );
-    console.log(`\n✅  Release created: https://github.com/${GH_OWNER}/${GH_REPO}/releases/tag/${tagName}\n`);
-  } catch (ghErr) {
-    console.error(`\n❌  Both publish methods failed.\n`);
-    console.error(`    Manual option: Go to https://github.com/${GH_OWNER}/${GH_REPO}/releases/new`);
-    console.error(`    Tag: ${tagName}`);
-    console.error(`    Upload: ${INSTALLER_EXE}\n`);
+    const opts = {
+      hostname: url.hostname,
+      path:     url.pathname + url.search,
+      method:   'POST',
+      headers: {
+        'Authorization':  `Bearer ${token}`,
+        'Accept':         'application/vnd.github+json',
+        'User-Agent':     'POPMYC-POS-Publisher/1.0',
+        'Content-Type':   'application/octet-stream',
+        'Content-Length': fileSize,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    };
+
+    const req = https.request(opts, (res) => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(raw) }); }
+        catch { resolve({ status: res.statusCode, body: raw }); }
+      });
+    });
+    req.on('error', reject);
+
+    let uploaded = 0;
+    fileStream.on('data', chunk => {
+      uploaded += chunk.length;
+      const pct = ((uploaded / fileSize) * 100).toFixed(1);
+      process.stdout.write(`\r  Uploading: ${pct}%  (${(uploaded/1024/1024).toFixed(1)} / ${(fileSize/1024/1024).toFixed(1)} MB)`);
+    });
+    fileStream.on('end', () => process.stdout.write('\n'));
+    fileStream.pipe(req);
+  });
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────────
+
+async function main() {
+  const apiBase = `/repos/${GH_OWNER}/${GH_REPO}`;
+
+  // 1. Check if release already exists
+  console.log(`🔍  Checking if release ${tagName} already exists…`);
+  const check = await githubRequest('GET', `${apiBase}/releases/tags/${tagName}`);
+  if (check.status === 200) {
+    console.error(`\n❌  Release ${tagName} already exists on GitHub.`);
+    console.error(`    Delete it first: https://github.com/${GH_OWNER}/${GH_REPO}/releases`);
+    console.error(`    Or bump the version in desktop/package.json\n`);
     process.exit(1);
   }
-} else {
-  console.log(`\n✅  Published successfully!`);
-  console.log(`    Release: https://github.com/${GH_OWNER}/${GH_REPO}/releases/tag/${tagName}`);
-  if (channel === 'beta') {
-    console.log(`\n    ℹ️  This is a BETA release — customers on stable channel are unaffected.`);
-    console.log(`    Test it by setting POPMYC_UPDATE_CHANNEL=beta in your environment.`);
-    console.log(`    When satisfied, run: node scripts/publish-release.js --channel stable\n`);
+
+  // 2. Create the release
+  console.log(`📝  Creating GitHub release ${tagName}…`);
+  const create = await githubRequest('POST', `${apiBase}/releases`, {
+    tag_name:         tagName,
+    target_commitish: 'main',
+    name:             relName,
+    body,
+    draft:            false,
+    prerelease:       prerel,
+    generate_release_notes: false,
+  });
+
+  if (create.status !== 201) {
+    console.error(`\n❌  Failed to create release (HTTP ${create.status}):`);
+    console.error(JSON.stringify(create.body, null, 2));
+    process.exit(1);
+  }
+
+  const releaseId  = create.body.id;
+  const uploadUrl  = create.body.upload_url;
+  const releaseUrl = create.body.html_url;
+  console.log(`✅  Release created: ${releaseUrl}`);
+
+  // 3. Upload the installer
+  console.log(`\n📤  Uploading installer (${installerSize} MB)…`);
+  const upload = await uploadAsset(uploadUrl, INSTALLER_EXE, GH_TOKEN);
+
+  if (upload.status !== 201) {
+    console.error(`\n❌  Upload failed (HTTP ${upload.status}):`);
+    console.error(JSON.stringify(upload.body, null, 2));
+    // Don't exit — release was created, can upload manually
+    console.error(`\n    Upload manually at: ${releaseUrl}`);
+    process.exit(1);
+  }
+
+  const assetUrl = upload.body.browser_download_url;
+  console.log(`✅  Installer uploaded: ${assetUrl}`);
+
+  // 4. Done
+  console.log(`
+╔══════════════════════════════════════════════════════╗`);
+  if (isStable) {
+    console.log(`║  ✅  STABLE release published successfully!           ║
+╚══════════════════════════════════════════════════════╝
+
+  Customers will auto-update within 4 hours.
+  Release URL: ${releaseUrl}
+`);
   } else {
-    console.log(`\n    ✅  STABLE release — customers will auto-update within 4 hours.\n`);
+    console.log(`║  ✅  BETA release published successfully!             ║
+╚══════════════════════════════════════════════════════╝
+
+  ℹ️  Real customers are NOT affected (beta channel only).
+
+  To test the auto-update on your own PC:
+    1. Set: $env:POPMYC_UPDATE_CHANNEL = "beta"
+    2. Open POPMYC POS → Settings → About & Updates → Check for Updates
+
+  When happy, publish to stable:
+    npm run publish:stable
+
+  Release URL: ${releaseUrl}
+`);
   }
 }
+
+main().catch(err => {
+  console.error('\n❌  Unexpected error:', err.message);
+  process.exit(1);
+});
