@@ -120,6 +120,7 @@ export default function SetupWizard() {
   const [bizCurrSymbol, setBizCurrSymbol] = useState('GH₵');
 
   // Step 3 — Branch
+  const [branchMode, setBranchMode] = useState<'SINGLE' | 'MULTI'>('SINGLE');
   const [branchName, setBranchName] = useState('Main Branch');
   const [branchCode, setBranchCode] = useState('MAIN');
 
@@ -247,6 +248,7 @@ export default function SetupWizard() {
       branch: {
         name: branchName.trim(),
         code: branchCode.trim().toUpperCase(),
+        branch_mode: branchMode,
       },
       admin: {
         first_name: adminFirst.trim(),
@@ -568,14 +570,41 @@ export default function SetupWizard() {
           {step === 3 && (
             <div>
               <StepHeader icon={<GitBranch style={{ width: 28, height: 28, color: TEAL }} />}
-                title="Main Branch" subtitle="Your primary business location" />
+                title="Branch Setup" subtitle="How many locations does your business have?" />
               {globalError && <ErrorBanner msg={globalError} />}
 
+              {/* Single / Multi toggle */}
+              <div className="flex gap-3 mb-5">
+                {([
+                  { value: 'SINGLE', label: 'Single Location', desc: 'One shop or office' },
+                  { value: 'MULTI',  label: 'Multiple Branches', desc: 'Two or more locations' },
+                ] as const).map(({ value, label, desc }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setBranchMode(value)}
+                    className={clsx(
+                      'flex-1 rounded-xl border-2 px-4 py-3 text-left transition-all',
+                      branchMode === value
+                        ? 'border-teal-500 bg-teal-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300',
+                    )}
+                  >
+                    <p className={clsx('text-sm font-bold', branchMode === value ? 'text-teal-700' : 'text-slate-700')}>{label}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">{desc}</p>
+                  </button>
+                ))}
+              </div>
+
+              {/* Name and code — always required */}
               <div className="space-y-4">
                 <div>
-                  <label className="label">Branch Name <Req /></label>
+                  <label className="label">
+                    {branchMode === 'SINGLE' ? 'Business Location Name' : 'Main Branch Name'} <Req />
+                  </label>
                   <input className={inputCls(fieldErrors.branch?.name)} value={branchName}
-                         onChange={e => setBranchName(e.target.value)} placeholder="e.g. Head Office" />
+                         onChange={e => setBranchName(e.target.value)}
+                         placeholder={branchMode === 'SINGLE' ? 'e.g. My Store' : 'e.g. Head Office'} />
                   <FieldError msg={fieldErrors.branch?.name} />
                 </div>
                 <div>
@@ -586,6 +615,14 @@ export default function SetupWizard() {
                   <FieldError msg={fieldErrors.branch?.code} />
                   <p className="mt-1 text-[11px] text-slate-400">Short unique identifier, e.g. HQ, MAIN, ACCRA1</p>
                 </div>
+
+                {branchMode === 'MULTI' && (
+                  <div className="rounded-xl bg-teal-50 border border-teal-200 px-4 py-3">
+                    <p className="text-[12px] text-teal-700 font-medium">
+                      ✓ You can add more branches from Settings → Branches after setup completes.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <StepActions onBack={() => setStep(2)}

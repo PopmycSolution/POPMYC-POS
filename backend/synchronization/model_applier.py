@@ -92,6 +92,15 @@ SYNC_ENTITY_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("branches",     "branch"),
     ("branches",     "warehouse"),
     ("branches",     "register"),
+    # ── Cloud-admin-pushed models ────────────────────────────────────────────
+    # These are queued on Render when an admin changes Business/License/Settings
+    # and downloaded by the local POS on the next sync cycle.
+    # They are DOWNLOAD-ONLY from the local POS perspective — local POS never
+    # uploads these (business_id/license changes are authoritative on the cloud).
+    ("businesses",   "business"),
+    ("businesses",   "businesssettings"),
+    ("licensing",    "license"),
+    ("licensing",    "licenserenewallog"),
 })
 
 # Fields that must never be overwritten by a client payload under any action.

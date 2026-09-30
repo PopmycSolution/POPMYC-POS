@@ -72,6 +72,17 @@ export interface InventoryConfig {
   inventoryMode: InventoryMode;
 }
 
+/** Branch mode — controls whether branch management UI is shown. */
+export type BranchMode = 'SINGLE' | 'MULTI';
+
+export interface BranchConfig {
+  /**
+   * SINGLE: business has one fixed location — Branches nav item is hidden.
+   * MULTI:  business has multiple locations — full branch management is shown.
+   */
+  branchMode: BranchMode;
+}
+
 export interface PaymentMethodConfig {
   id: string;
   name: string;
@@ -103,6 +114,7 @@ interface SettingsStore {
   receipt: ReceiptConfig;
   pricing: PricingConfig;
   inventory: InventoryConfig;
+  branchConfig: BranchConfig;
   paymentMethods: PaymentMethodConfig[];
   emailNotifications: EmailNotificationConfig;
   updateBusiness: (data: Partial<BusinessConfig>) => void;
@@ -110,6 +122,7 @@ interface SettingsStore {
   updateReceipt: (data: Partial<ReceiptConfig>) => void;
   updatePricing: (data: Partial<PricingConfig>) => void;
   updateInventory: (data: Partial<InventoryConfig>) => void;
+  updateBranchConfig: (data: Partial<BranchConfig>) => void;
   togglePaymentMethod: (id: string) => void;
   updateEmailNotifications: (data: Partial<EmailNotificationConfig>) => void;
   /**
@@ -128,6 +141,8 @@ interface SettingsStore {
   readonly inventoryEnabled: boolean;
   /** Computed: does the current business category support negotiable pricing? */
   readonly supportsNegotiablePricing: boolean;
+  /** Computed: is this a single-branch business (branch nav hidden)? */
+  readonly isSingleBranch: boolean;
 }
 
 const STORAGE_KEY = 'popmyc-settings';
@@ -176,6 +191,10 @@ const defaultInventory: InventoryConfig = {
   inventoryMode: 'FULL_POS',
 };
 
+const defaultBranchConfig: BranchConfig = {
+  branchMode: 'SINGLE',
+};
+
 const defaultPaymentMethods: PaymentMethodConfig[] = [
   { id: 'pm1', name: 'Cash',            code: 'CASH',         enabled: true,  type: 'CASH'         },
   { id: 'pm2', name: 'MTN Mobile Money',code: 'MTN_MOMO',     enabled: true,  type: 'MOBILE_MONEY' },
@@ -210,11 +229,12 @@ interface StoredState {
   receipt: ReceiptConfig;
   pricing?: PricingConfig;
   inventory?: InventoryConfig;
+  branchConfig?: BranchConfig;
   paymentMethods: PaymentMethodConfig[];
   emailNotifications?: EmailNotificationConfig;
 }
 
-function loadState(): StoredState & { pricing: PricingConfig; inventory: InventoryConfig; emailNotifications: EmailNotificationConfig } {
+function loadState(): StoredState & { pricing: PricingConfig; inventory: InventoryConfig; branchConfig: BranchConfig; emailNotifications: EmailNotificationConfig } {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
@@ -222,14 +242,14 @@ function loadState(): StoredState & { pricing: PricingConfig; inventory: Invento
       if (parsed?.business) {
         return {
           ...parsed,
-          // Backfill businessCategory for existing stored settings that predate this field
           business: {
             ...defaultBusiness,
             ...parsed.business,
             businessCategory: parsed.business.businessCategory ?? 'GENERAL_RETAIL',
           },
-          pricing:   { ...defaultPricing,   ...(parsed.pricing   ?? {}) },
-          inventory: { ...defaultInventory, ...(parsed.inventory ?? {}) },
+          pricing:      { ...defaultPricing,      ...(parsed.pricing      ?? {}) },
+          inventory:    { ...defaultInventory,    ...(parsed.inventory    ?? {}) },
+          branchConfig: { ...defaultBranchConfig, ...(parsed.branchConfig ?? {}) },
           emailNotifications: { ...defaultEmailNotifications, ...(parsed.emailNotifications ?? {}) },
         };
       }
@@ -241,6 +261,7 @@ function loadState(): StoredState & { pricing: PricingConfig; inventory: Invento
     receipt:            defaultReceipt,
     pricing:            defaultPricing,
     inventory:          defaultInventory,
+    branchConfig:       defaultBranchConfig,
     paymentMethods:     defaultPaymentMethods,
     emailNotifications: defaultEmailNotifications,
   };
@@ -248,7 +269,7 @@ function loadState(): StoredState & { pricing: PricingConfig; inventory: Invento
   return initial;
 }
 
-function persist(state: StoredState & { pricing: PricingConfig; inventory: InventoryConfig; emailNotifications: EmailNotificationConfig }) {
+function persist(state: StoredState & { pricing: PricingConfig; inventory: InventoryConfig; branchConfig: BranchConfig; emailNotifications: EmailNotificationConfig }) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
@@ -260,11 +281,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
     receipt:            initial.receipt,
     pricing:            initial.pricing,
     inventory:          initial.inventory,
+    branchConfig:       initial.branchConfig,
     paymentMethods:     initial.paymentMethods,
     emailNotifications: initial.emailNotifications,
 
     get stockEnabled() {
-      // Legacy compat: true when inventory management is active
       const mode = resolveOperatingMode(get().inventory.inventoryMode);
       return mode === 'FULL_POS' || mode === 'INVENTORY_ONLY';
     },
@@ -285,6 +306,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 
     get supportsNegotiablePricing() {
       return NEGOTIABLE_BUSINESS_CATEGORIES.includes(get().business.businessCategory);
+    },
+
+    get isSingleBranch() {
+      return get().branchConfig.branchMode === 'SINGLE';
+    },
+
+    updateBranchConfig: (data) => {
+      set((state) => {
+        const next = { ...state, branchConfig: { ...state.branchConfig, ...data } };
+        persist(next);
+        return { branchConfig: next.branchConfig };
+      });
     },
 
     updateBusiness: (data) => {
@@ -414,6 +447,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
         const settingsRes = await api.get<{
           inventory_mode?: string;
           allow_cashier_price_negotiation?: boolean;
+          branch_mode?: string;
           tax_config?: {
             enabled?: boolean;
             name?: string;
@@ -437,6 +471,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
               persist(next);
               return { pricing: next.pricing };
             });
+          }
+          if (sData.branch_mode) {
+            const bm = (sData.branch_mode as string).toUpperCase();
+            if (bm === 'SINGLE' || bm === 'MULTI') {
+              set((state) => {
+                const next = { ...state, branchConfig: { branchMode: bm as BranchMode } };
+                persist(next);
+                return { branchConfig: next.branchConfig };
+              });
+            }
           }
           if (sData.tax_config) {
             const tc = sData.tax_config;

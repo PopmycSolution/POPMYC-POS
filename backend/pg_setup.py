@@ -113,8 +113,14 @@ def _update_env(data_dir: str, updates: dict) -> None:
         "DJANGO_DEBUG":          "False",
         "DJANGO_ALLOWED_HOSTS":  "localhost,127.0.0.1",
         "CORS_ALLOWED_ORIGINS":  "http://localhost:8000,http://127.0.0.1:8000",
-        "SYNC_CLOUD_URL":        "",
-        "SYNC_CLOUD_TOKEN":      "",
+        # ── Cloud sync — pre-configured for the POPMYC cloud backend ──────────
+        # CLOUD_ENABLED=True activates the background SyncWorker that uploads
+        # local POS data (products, sales, customers, etc.) to Render and
+        # downloads admin-triggered changes (license, business settings, etc.)
+        # from Render back to the local POS automatically when internet is available.
+        "CLOUD_ENABLED":         "True",
+        "SYNC_CLOUD_URL":        "https://popmyc-pos.onrender.com/api/sync",
+        "SYNC_CLOUD_TOKEN":      "WS1qTCN7vP8m6ziVLhZDMIckd5QGoAtaERfbupney2gXJO9w",
         "CLOUD_SETUP_URL":       "https://popmyc-pos.onrender.com",
         "POPMYC_CELERY_EAGER":   "True",
     }
@@ -155,6 +161,7 @@ def _update_env(data_dir: str, updates: dict) -> None:
             f"DJANGO_ALLOWED_HOSTS={merged['DJANGO_ALLOWED_HOSTS']}\n",
             f"\n",
             f"CORS_ALLOWED_ORIGINS={merged['CORS_ALLOWED_ORIGINS']}\n",
+            f"CLOUD_ENABLED={merged.get('CLOUD_ENABLED', 'True')}\n",
             f"SYNC_CLOUD_URL={merged['SYNC_CLOUD_URL']}\n",
             f"SYNC_CLOUD_TOKEN={merged['SYNC_CLOUD_TOKEN']}\n",
             f"\n",
@@ -458,9 +465,12 @@ def _is_pg_service_running(service_name: str | None = None) -> bool:
     services_to_check = []
     if service_name:
         services_to_check.append(service_name)
-    # Common service name patterns
-    services_to_check += ["postgresql", "postgresql-x64-16", "postgresql-x64-15",
-                           "postgresql-x64-14", "postgresql-x64-13", "postgresql-x64-12"]
+    # Common service name patterns — include POPMYCPostgreSQL16
+    services_to_check += [
+        "POPMYCPostgreSQL16",
+        "postgresql", "postgresql-x64-16", "postgresql-x64-15",
+        "postgresql-x64-14", "postgresql-x64-13", "postgresql-x64-12",
+    ]
     for svc in services_to_check:
         try:
             r = subprocess.run(
@@ -472,6 +482,60 @@ def _is_pg_service_running(service_name: str | None = None) -> bool:
         except Exception:
             continue
     return False
+
+
+def _find_pg_listening_port(
+    candidate_ports: tuple = (5432, 5433, 5434, 5435, 5436, 5437, 5438, 5439, 5440),
+    host: str = "127.0.0.1",
+) -> int | None:
+    """
+    Scan a range of candidate ports to find where PostgreSQL is actually
+    listening.  Returns the first port that accepts a TCP connection, or
+    None if none respond.
+
+    This handles the common case where the customer installed PostgreSQL on
+    a non-standard port (e.g. 5234) — the registry may say 5432 but the
+    service is listening elsewhere.  By scanning TCP we find it regardless
+    of what the registry claims.
+    """
+    import socket
+    for port in candidate_ports:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return port
+        except (OSError, ConnectionRefusedError, TimeoutError):
+            continue
+    return None
+
+
+def _read_pg_port_from_conf(data_dir_path: str | None) -> int | None:
+    """
+    Read the 'port' setting from postgresql.conf in the given data directory.
+    Returns the port as int, or None if it cannot be determined.
+    """
+    if not data_dir_path:
+        return None
+    conf_path = os.path.join(data_dir_path, "postgresql.conf")
+    if not os.path.isfile(conf_path):
+        return None
+    try:
+        with open(conf_path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if stripped.lower().startswith("port"):
+                    # e.g. "port = 5433" or "port=5234"
+                    parts = stripped.split("=", 1)
+                    if len(parts) == 2:
+                        val = parts[1].strip().split()[0].rstrip("#").strip()
+                        try:
+                            return int(val)
+                        except ValueError:
+                            pass
+    except Exception:
+        pass
+    return None
 
 
 def _start_pg_service(service_name: str | None) -> bool:
@@ -713,6 +777,67 @@ def action_check(data_dir: str) -> None:
     # hasn't been written yet for this installation).
     effective_port = pg["port"] if pg["port"] else db_port
 
+    # ── Step 1: SCM service state (fast, no network) ──────────────────────────
+    pg_svc_running = _is_pg_service_running(pg.get("service_name"))
+
+    # ── Port resolution: registry → postgresql.conf → TCP scan ───────────────
+    # The customer may have installed PostgreSQL on a non-standard port
+    # (e.g. 5234). The registry stores the port set at install time but can
+    # be stale if the user changed it after installation.
+    #
+    # Strategy:
+    #   1. Build known candidates: registry port, postgresql.conf port, env port.
+    #   2. TCP-test the known candidates.
+    #   3. ONLY if known candidates are dark AND SCM says service IS running,
+    #      do a wider TCP scan to find the non-standard port.
+    #      (When SCM says NOT running, skip the wider scan — the service is
+    #      genuinely stopped and we would otherwise pick up unrelated PG
+    #      instances on the developer machine.)
+
+    # Try to read port from postgresql.conf for each detected instance
+    conf_port = None
+    for inst in pg.get("all_instances", [pg]):
+        base_dir = inst.get("base_dir") or ""
+        for data_subdir in ["data", ""]:
+            conf_dir = os.path.join(base_dir, data_subdir) if data_subdir else base_dir
+            p = _read_pg_port_from_conf(conf_dir)
+            if p:
+                conf_port = p
+                break
+        if conf_port:
+            break
+
+    # Build candidate ports: registry port, conf port, env port
+    port_candidates = []
+    for p in [effective_port, conf_port, db_port]:
+        if p and p not in port_candidates:
+            port_candidates.append(p)
+
+    # TCP-test the known candidates
+    actual_port = None
+    found_via_wider_scan = False
+    for p in port_candidates:
+        if _is_port_in_use(p, db_host):
+            actual_port = p
+            break
+
+    # Wider scan: only when service IS registered/running but known ports dark
+    # — this means PostgreSQL is running on a non-standard port
+    if actual_port is None and pg_svc_running:
+        wider = tuple(p for p in range(5432, 5445) if p not in port_candidates)
+        actual_port = _find_pg_listening_port(wider, db_host)
+        if actual_port:
+            found_via_wider_scan = True
+            print(
+                f"[pg_setup] Known ports {port_candidates} not responding but "
+                f"service is running; found PostgreSQL on port {actual_port} "
+                f"via TCP scan (non-standard port installation).",
+                file=sys.stderr,
+            )
+
+    # Use the discovered port; fall back to effective_port if scan found nothing
+    effective_port = actual_port if actual_port else effective_port
+
     # ── Zombie-running detection ───────────────────────────────────────────────
     # A service may report STATE=RUNNING in the SCM but not actually accept
     # TCP connections (corrupted install, port conflict, startup failure).
@@ -722,13 +847,23 @@ def action_check(data_dir: str) -> None:
     # even on a machine that just needs a fresh dedicated POPMYC PG install.
     #
     # Strategy:
-    #   1. Check SCM service state (fast, no network).
-    #   2. If "running", TCP-test the port (cheap socket connect, 2s timeout).
-    #   3. Only if both pass, attempt a full DB connection with credentials.
+    #   1. Check SCM service state (done above, before TCP scan).
+    #   2. If service is running but known port dark, we already did wider scan.
+    #   3. TCP-test the effective port.
+    #   4. Only if both pass, attempt a full DB connection with credentials.
     # ──────────────────────────────────────────────────────────────────────────
 
-    # Step 1: SCM service state
-    pg_svc_running = _is_pg_service_running(pg.get("service_name"))
+    # Step 1b: If SCM says not running BUT we found PostgreSQL on a
+    # non-standard port via wider TCP scan, treat it as running.
+    # This handles customers who installed PG with a custom port and a
+    # different service name that _is_pg_service_running doesn't recognise.
+    if not pg_svc_running and found_via_wider_scan and actual_port is not None:
+        pg_svc_running = True
+        print(
+            f"[pg_setup] SCM reports no known PG service but found PostgreSQL "
+            f"on non-standard port {actual_port} — treating as running.",
+            file=sys.stderr,
+        )
 
     if not pg_svc_running:
         _out({
@@ -744,7 +879,8 @@ def action_check(data_dir: str) -> None:
 
     # Step 2: TCP port test — the service is "RUNNING" but is it actually
     # accepting connections? (Handles zombie-running / startup-failed states.)
-    port_open = _is_port_in_use(effective_port, db_host)
+    # Use actual_port from our TCP scan: if it's not None, the port is open.
+    port_open = actual_port is not None and _is_port_in_use(effective_port, db_host)
     if not port_open:
         _out({
             "success": False, "action": "check",
@@ -847,7 +983,9 @@ def action_create(data_dir: str, pg_admin_password: str) -> None:
     db_name  = env.get("DB_NAME", "popmyc_pos")
 
     # Use the port from the .env if already written; otherwise detect from PG.
-    # This ensures we talk to the right PG instance on non-default ports.
+    # Also TCP-scan to verify the port is actually listening — handles the case
+    # where the customer installed PostgreSQL on a non-default port and the
+    # registry/env has a stale value.
     env_port = env.get("DB_PORT", "")
     if env_port:
         db_port = int(env_port)
@@ -857,6 +995,24 @@ def action_create(data_dir: str, pg_admin_password: str) -> None:
             db_port = pg["port"] if pg.get("port") else 5432
         except Exception:
             db_port = 5432
+
+    # TCP-scan to find the port PostgreSQL is ACTUALLY listening on.
+    # This corrects a stale registry/env port when the customer changed
+    # the port during or after PostgreSQL installation.
+    port_candidates = []
+    for p in [db_port, 5432, 5433, 5434, 5435, 5436]:
+        if p not in port_candidates:
+            port_candidates.append(p)
+    actual_port = _find_pg_listening_port(tuple(port_candidates), db_host)
+    if actual_port and actual_port != db_port:
+        print(
+            f"[pg_setup] Registry/env port {db_port} is not listening; "
+            f"found PostgreSQL on port {actual_port} via TCP scan.",
+            file=sys.stderr,
+        )
+        db_port = actual_port
+    elif actual_port:
+        db_port = actual_port
 
     # Always use the dedicated application user — never the superuser.
     app_user = "popmyc_app"

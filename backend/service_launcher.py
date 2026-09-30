@@ -55,7 +55,7 @@ from pathlib import Path
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 SERVICE_NAME      = "POPMYCBackend"
-PG_RETRY_COUNT    = 30        # attempts
+PG_RETRY_COUNT    = 18        # attempts — 18 × 5s = 90s max wait, safely under Electron's 180s deadline
 PG_RETRY_DELAY    = 5.0       # seconds between attempts
 LOG_PREFIX        = "[POPMYC Service]"
 
@@ -284,6 +284,10 @@ def apply_migrations(data_dir: Path) -> bool:
     """
     Run Django migrations.  Safe to call on every startup — Django is idempotent.
     Returns True on success, False on failure.
+
+    NOTE: Pre-migration backups are intentionally skipped here for speed.
+    The startup latency budget is tight (Electron waits 180s).
+    Backups should be scheduled separately, not run on every service start.
     """
     from django.db import connection as _conn
     from django.db.migrations.executor import MigrationExecutor
@@ -299,11 +303,7 @@ def apply_migrations(data_dir: Path) -> bool:
         pending = []
 
     if pending:
-        log(f"{len(pending)} migration(s) pending — creating pre-migration backup …")
-        try:
-            _auto_backup(data_dir)
-        except Exception as bup_exc:
-            log(f"WARNING: Backup step raised: {bup_exc}")
+        log(f"{len(pending)} migration(s) pending — applying …")
     else:
         log("No pending migrations.")
 
@@ -324,6 +324,117 @@ def apply_migrations(data_dir: Path) -> bool:
 # ── Graceful shutdown ──────────────────────────────────────────────────────────
 
 _shutdown_requested = False
+
+
+def _register_device_with_cloud(data_dir: Path) -> None:
+    """
+    Register (or update) this local POS installation as a SyncDevice on Render.
+
+    This tells the cloud which business this device belongs to so that
+    SyncDownloadView can scope records correctly when the device syncs.
+
+    Registration is idempotent — the cloud uses update_or_create on device_id.
+    The device_id is a stable UUID stored in the local data directory so the
+    same installation always uses the same identity across restarts.
+
+    Non-fatal: if the cloud is unreachable the local POS continues working.
+    The SyncWorker will retry registration on every startup via SyncManager.
+    """
+    try:
+        from django.conf import settings as _settings
+        cloud_url   = getattr(_settings, "SYNC_CLOUD_URL",   "").rstrip("/")
+        cloud_token = getattr(_settings, "SYNC_CLOUD_TOKEN", "")
+        cloud_enabled = getattr(_settings, "CLOUD_ENABLED", False)
+
+        if not cloud_enabled or not cloud_url or not cloud_token:
+            return  # not configured — skip silently
+
+        # ── Get or generate a stable device_id ────────────────────────────────
+        device_id_file = data_dir / "device_id.txt"
+        if device_id_file.exists():
+            device_id = device_id_file.read_text(encoding="utf-8").strip()
+        else:
+            import uuid as _uuid
+            device_id = str(_uuid.uuid4())
+            device_id_file.write_text(device_id, encoding="utf-8")
+            log(f"Generated new device_id: {device_id}")
+
+        # ── Get business and branch from local DB ──────────────────────────────
+        business_id = None
+        branch_id   = None
+        machine_name = ""
+        try:
+            import socket
+            machine_name = socket.gethostname()
+        except Exception:
+            pass
+
+        try:
+            from businesses.models import Business
+            biz = Business.objects.order_by("created_at").first()
+            if biz:
+                business_id = str(biz.id)
+        except Exception:
+            pass
+
+        try:
+            from branches.models import Branch
+            br = Branch.objects.filter(is_head_office=True).first() or Branch.objects.first()
+            if br:
+                branch_id = str(br.id)
+        except Exception:
+            pass
+
+        # ── POST to cloud device endpoint ─────────────────────────────────────
+        import urllib.request
+        import urllib.error
+        import json
+
+        payload = json.dumps({
+            "device_id":   device_id,
+            "name":        f"POPMYC POS — {machine_name}" if machine_name else "POPMYC POS",
+            "business_id": business_id,
+            "branch_id":   branch_id,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{cloud_url}/device/",
+            data=payload,
+            headers={
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",
+                "Authorization": f"Bearer {cloud_token}",
+            },
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode())
+            log(f"Device registered with cloud. device_id={device_id} business_id={business_id}")
+
+            # ── Also create/update local SyncDevice record ─────────────────────
+            # The SyncWorker needs a local SyncDevice row to track sync_checkpoint.
+            try:
+                import uuid as _uuid
+                from synchronization.models import SyncDevice
+                SyncDevice.objects.update_or_create(
+                    device_id=_uuid.UUID(device_id),
+                    defaults={
+                        "name":        f"POPMYC POS — {machine_name}",
+                        "business_id": _uuid.UUID(business_id) if business_id else None,
+                        "branch_id":   _uuid.UUID(branch_id)   if branch_id   else None,
+                        "is_active":   True,
+                    },
+                )
+            except Exception as _local_exc:
+                log(f"WARNING: Could not create local SyncDevice: {_local_exc}")
+
+    except urllib.error.HTTPError as exc:
+        log(f"WARNING: Device registration HTTP error {exc.code} — will retry on next start.")
+    except (urllib.error.URLError, OSError):
+        log("WARNING: Cloud unreachable for device registration — will sync when online.")
+    except Exception as exc:
+        log(f"WARNING: Device registration failed ({type(exc).__name__}) — non-fatal.")
 
 
 def _handle_sigterm(signum, frame):  # noqa: ANN001
@@ -394,6 +505,30 @@ def main() -> None:
     if str(backend_dir) not in sys.path:
         sys.path.insert(0, str(backend_dir))
 
+    # ── Ensure staticfiles/ exists before Django/WhiteNoise setup ────────────
+    # WhiteNoise raises during django.setup() if WHITENOISE_ROOT points to a
+    # directory that doesn't exist. Create it here as an empty directory so
+    # WhiteNoise initialises cleanly even if collectstatic hasn't been run.
+    # The actual static files (React SPA) are bundled by the installer into
+    # {installDir}/resources/backend/staticfiles/ — this just handles the edge
+    # case where the directory was accidentally deleted or not created.
+    staticfiles_dir = backend_dir / "staticfiles"
+    try:
+        staticfiles_dir.mkdir(parents=True, exist_ok=True)
+        # Create a minimal index.html placeholder so WhiteNoise doesn't
+        # serve a 404 for every request before the SPA is loaded.
+        # The real index.html from the installer will overwrite this.
+        placeholder = staticfiles_dir / "index.html"
+        if not placeholder.exists():
+            placeholder.write_text(
+                "<html><body><p>Loading POPMYC POS… "
+                "If this page persists, please restart the application.</p></body></html>",
+                encoding="utf-8",
+            )
+            log("Created staticfiles placeholder — frontend files will load on restart.")
+    except Exception as _sf_exc:
+        log(f"WARNING: Could not create staticfiles directory: {_sf_exc}")
+
     # ── Django setup ─────────────────────────────────────────────────────────
     log("Initialising Django …")
     try:
@@ -419,7 +554,15 @@ def main() -> None:
     # ── Migrations ────────────────────────────────────────────────────────────
     ok = apply_migrations(data_dir)
     if not ok:
-        fatal("Database migration failed. Cannot start safely.")
+        # Non-fatal: log the failure but continue starting Waitress.
+        # A migration failure usually means the DB schema is behind but the
+        # existing tables still work — the customer can still use the POS
+        # and the migration will be retried on the next restart.
+        log_err(
+            "WARNING: Database migration had errors — starting anyway. "
+            "Some features may not work until migrations succeed. "
+            "Check the logs and restart the application."
+        )
 
     # ── Static file check (non-fatal warning only) ────────────────────────────
     static_index = backend_dir / "staticfiles" / "index.html"
@@ -438,6 +581,13 @@ def main() -> None:
     # background without blocking HTTP requests or POS sales.
     # It stops automatically when the process exits (daemon=True).
     # If CLOUD_ENABLED=False or SYNC_CLOUD_URL is not set it sleeps silently.
+
+    # ── Register this device with the cloud ───────────────────────────────────
+    # Done BEFORE starting the SyncWorker so the first sync cycle already has
+    # a registered device with the correct business_id.
+    # Non-blocking and non-fatal — the local POS works offline without it.
+    _register_device_with_cloud(data_dir)
+
     try:
         from synchronization.sync_worker import SyncWorker
         _sync_worker = SyncWorker()

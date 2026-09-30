@@ -254,6 +254,17 @@ SYNC_CLOUD_TOKEN = os.environ.get(
     ""
 )
 
+# ── Shared sync token ──────────────────────────────────────────────────────────
+# This token is the shared secret between Render (cloud) and every local POS.
+# It is set as an environment variable on Render and written to each local
+# .env by pg_setup.py during installation.
+# Local POS devices send: Authorization: Bearer <SYNC_CLOUD_TOKEN>
+# The SyncTokenAuthentication backend in synchronization/views.py validates it.
+SYNC_CLOUD_TOKEN = os.environ.get(
+    "SYNC_CLOUD_TOKEN",
+    "WS1qTCN7vP8m6ziVLhZDMIckd5QGoAtaERfbupney2gXJO9w",   # default matches installer
+)
+
 # ── Cloud licensing service URL ────────────────────────────────────────────────
 # Used by SetupRunView._verify_cloud_reservation() during the first-run
 # cloud TrialCode activation handshake (Phase 1.5).

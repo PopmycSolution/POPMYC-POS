@@ -41,6 +41,8 @@ export interface SetupPayload {
   branch: {
     name: string;
     code: string;
+    /** SINGLE = one location, no branch management; MULTI = multiple branches */
+    branch_mode?: 'SINGLE' | 'MULTI';
   };
   admin: {
     first_name: string;

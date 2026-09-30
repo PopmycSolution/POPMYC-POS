@@ -509,8 +509,14 @@ class SetupRunView(APIView):
                         pending_license.business = business
                         pending_license.save(update_fields=["business", "updated_at"])
 
-                # 2. BusinessSettings
-                BusinessSettings.objects.get_or_create(business=business)
+                # 2. BusinessSettings — save branch_mode from wizard
+                branch_mode_val = branch_data.get("branch_mode", "SINGLE").upper()
+                if branch_mode_val not in ("SINGLE", "MULTI"):
+                    branch_mode_val = "SINGLE"
+                biz_settings, _ = BusinessSettings.objects.get_or_create(business=business)
+                if biz_settings.branch_mode != branch_mode_val:
+                    biz_settings.branch_mode = branch_mode_val
+                    biz_settings.save(update_fields=["branch_mode", "updated_at"])
 
                 # 3. Head-office Branch
                 branch_name = branch_data.get("name", "Main Branch").strip()

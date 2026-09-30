@@ -45,6 +45,14 @@ class InventoryModeWriteSerializer(serializers.ModelSerializer):
         read_only_fields = ("id",)
 
 
+class BranchModeWriteSerializer(serializers.ModelSerializer):
+    """Update only branch_mode (Admin/SuperAdmin only)."""
+    class Meta:
+        model = BusinessSettings
+        fields = ("id", "branch_mode")
+        read_only_fields = ("id",)
+
+
 class BusinessSettingsPublicSerializer(serializers.ModelSerializer):
     """
     Lightweight serializer returned to all authenticated users so the frontend
@@ -63,6 +71,7 @@ class BusinessSettingsPublicSerializer(serializers.ModelSerializer):
             "inventory_mode",
             "effective_operating_mode",
             "allow_cashier_price_negotiation",
+            "branch_mode",
             "stock_enabled",
             "pos_enabled",
             "inventory_enabled",

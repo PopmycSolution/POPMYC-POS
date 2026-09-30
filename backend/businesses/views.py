@@ -14,6 +14,7 @@ from businesses.serializers import (
     TaxConfigWriteSerializer,
     PricingConfigWriteSerializer,
     InventoryModeWriteSerializer,
+    BranchModeWriteSerializer,
     BusinessSettingsPublicSerializer,
 )
 
@@ -116,6 +117,27 @@ class BusinessSettingsViewSet(BusinessScopedMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         # Return public summary so frontend gets stock_enabled computed field
+        return Response(BusinessSettingsPublicSerializer(instance).data)
+
+    @action(detail=True, methods=["put", "patch"], url_path="branch-mode")
+    def branch_mode(self, request, pk=None):
+        """
+        Update the branch mode for a business.
+        Only Admin and Super Admin are permitted.
+
+        PATCH /api/v1/businesses/settings/{id}/branch-mode/
+        Body: { "branch_mode": "SINGLE" | "MULTI" }
+        """
+        if not _can_manage_pricing(request.user):
+            return Response(
+                {"detail": "Only Admin and Super Admin can modify branch mode."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        instance = self.get_object()
+        partial = request.method == "PATCH"
+        serializer = BranchModeWriteSerializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(BusinessSettingsPublicSerializer(instance).data)
 
     @action(detail=False, methods=["get"], url_path="my-settings")

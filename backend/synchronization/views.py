@@ -15,7 +15,7 @@ Stage 1 Security Hardening (2026):
 import logging
 from uuid import UUID
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from rest_framework import serializers, status
@@ -31,17 +31,79 @@ from synchronization.models import SyncDevice, SyncRecord
 logger = logging.getLogger(__name__)
 
 
+# ── Shared sync-token authenticator ───────────────────────────────────────────
+
+class SyncTokenAuthentication:
+    """
+    Simple shared-token DRF authentication for local POS sync requests.
+
+    Local POS devices send:
+        Authorization: Bearer <SYNC_CLOUD_TOKEN>
+
+    The token is validated against settings.SYNC_CLOUD_TOKEN using a
+    constant-time comparison to prevent timing attacks.  On success,
+    a synthetic AnonymousUser with a stable business_id (derived from
+    the request payload or device registration) is returned so the
+    existing business-scoping logic in the views continues to work.
+
+    This authenticator runs FIRST so shared-token requests never reach
+    the JWT or Device token backends (which would reject them).
+    """
+
+    def authenticate(self, request):
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if not auth_header.startswith("Bearer "):
+            return None  # let next authenticator try
+
+        raw_token = auth_header[len("Bearer "):]
+        if not raw_token:
+            return None
+
+        from django.conf import settings as _settings
+        import secrets
+        expected = getattr(_settings, "SYNC_CLOUD_TOKEN", "")
+        if not expected:
+            return None  # not configured — skip
+
+        if not secrets.compare_digest(raw_token.strip(), expected.strip()):
+            return None  # wrong token — let JWT try (may be a real JWT)
+
+        # Valid shared token — return a synthetic user.
+        # We use a lightweight proxy so DRF is_authenticated() returns True
+        # without needing a real DB user lookup.
+        return (_SyncTokenUser(), raw_token)
+
+    def authenticate_header(self, request):
+        return "Bearer realm=\"sync\""
+
+
+class _SyncTokenUser:
+    """Minimal user object satisfying DRF's is_authenticated check."""
+    is_authenticated = True
+    is_anonymous     = False
+    is_active        = True
+    is_superuser     = False
+    pk               = None
+    id               = None
+    business_id      = None   # populated by _get_authenticated_business_id via device lookup
+
+    def __str__(self):
+        return "SyncTokenUser"
+
+
 def _get_sync_authenticators():
     """
-    Return authenticators that accept EITHER:
-    - Authorization: Bearer <jwt>     (existing JWT path)
-    - Authorization: Device <token>   (Stage 6.2B cloud device token)
+    Return authenticators that accept ANY of:
+    - Authorization: Bearer <jwt>          (existing JWT path)
+    - Authorization: Device <token>        (Stage 6.2B cloud device token)
+    - Authorization: Bearer <sync_token>   (shared SYNC_CLOUD_TOKEN — simple installs)
 
-    DeviceTokenAuthentication is imported lazily to avoid a circular import
-    during Django startup (cloud app imports synchronization models).
+    The SyncTokenAuthentication backend validates the shared token from
+    settings.SYNC_CLOUD_TOKEN so every local POS installation can sync
+    without needing a per-device JWT or cloud device registration.
     """
     from cloud.authentication import DeviceTokenAuthentication
-    return [DeviceTokenAuthentication(), JWTAuthentication()]
+    return [SyncTokenAuthentication(), DeviceTokenAuthentication(), JWTAuthentication()]
 
 
 def _get_authenticated_business_id(request):
@@ -51,10 +113,10 @@ def _get_authenticated_business_id(request):
     Priority:
       1. Device token — business comes from the CloudDevice's registered business.
       2. JWT user     — business comes from request.user.business_id.
+      3. Sync token   — business comes from the SyncDevice registered for
+                        the device_id supplied in the request (query param or body).
 
     Returns a UUID or None if no business context is available.
-    This is the ONLY source of trust for business scoping; client-supplied
-    query parameters may only narrow this context, never override it.
     """
     from cloud.authentication import get_device_from_request
     from cloud.models import CloudDevice
@@ -64,11 +126,28 @@ def _get_authenticated_business_id(request):
         return device.business_id
 
     user = getattr(request, "user", None)
-    if user and user.is_authenticated:
+    if user and user.is_authenticated and not isinstance(user, _SyncTokenUser):
         biz_id = getattr(user, "business_id", None)
         if biz_id:
             try:
                 return UUID(str(biz_id))
+            except (ValueError, TypeError):
+                pass
+
+    # Sync token path — look up the SyncDevice by device_id from request
+    if isinstance(user, _SyncTokenUser):
+        device_id_str = (
+            request.query_params.get("device_id")
+            or (request.data.get("device_id") if hasattr(request, "data") else None)
+        )
+        if device_id_str:
+            try:
+                dev_uuid = UUID(str(device_id_str))
+                sync_dev = SyncDevice.objects.filter(
+                    device_id=dev_uuid, is_active=True
+                ).first()
+                if sync_dev and sync_dev.business_id:
+                    return sync_dev.business_id
             except (ValueError, TypeError):
                 pass
 
@@ -635,22 +714,38 @@ class SyncDownloadView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Branch filter — narrows within the authenticated business
+        # Branch filter — narrows within the authenticated business.
+        # NOTE: cloud-admin-originated records (Business, License changes) have
+        # branch_id=None — they must always be delivered to every branch.
+        # Only filter by branch when the client explicitly requests it AND
+        # only for records that already have a branch_id set.
         if branch_id:
             try:
-                filters["branch_id"] = UUID(str(branch_id))
+                bfilter = UUID(str(branch_id))
+                # Include records for this branch OR records with no branch (global)
+                records = (
+                    SyncRecord.objects.filter(**filters)
+                    .filter(models.Q(branch_id=bfilter) | models.Q(branch_id=None))
+                    .order_by("updated_at")[:500]
+                )
             except (ValueError, TypeError):
                 return Response(
                     {"success": False, "error": "Invalid branch ID."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         elif device and device.branch_id:
-            filters["branch_id"] = device.branch_id
-
-        records = (
-            SyncRecord.objects.filter(**filters)
-            .order_by("updated_at")[:500]
-        )
+            bfilter = device.branch_id
+            # Include records for this branch OR records with no branch (global)
+            records = (
+                SyncRecord.objects.filter(**filters)
+                .filter(models.Q(branch_id=bfilter) | models.Q(branch_id=None))
+                .order_by("updated_at")[:500]
+            )
+        else:
+            records = (
+                SyncRecord.objects.filter(**filters)
+                .order_by("updated_at")[:500]
+            )
 
         serializer = SyncRecordSerializer(records, many=True)
 

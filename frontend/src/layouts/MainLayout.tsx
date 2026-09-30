@@ -34,10 +34,14 @@ import api from '@/services/api';
 // ── License expiry banner ─────────────────────────────────────────────────────
 function LicenseExpiryBanner() {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const userRole    = useAuthStore((s) => s.user?.role ?? 'CASHIER');
   const [daysLeft, setDaysLeft]   = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [licStatus, setLicStatus] = useState<string>('');
   const navigate = useNavigate();
+
+  // Only SUPER_ADMIN and ADMIN can renew — everyone else just sees the warning
+  const canRenew = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
 
   useEffect(() => {
     if (!accessToken || accessToken.startsWith('local-session-')) return;
@@ -54,8 +58,10 @@ function LicenseExpiryBanner() {
   if (licStatus === 'EXPIRED') {
     return (
       <div className="flex items-center gap-3 px-4 py-2.5 text-sm font-medium bg-red-600 text-white">
-        <span>⛔ Your POPMYC POS license has expired. Renew to continue using all features.</span>
-        <button onClick={() => navigate('/settings')} className="ml-auto shrink-0 underline font-semibold">Renew Now</button>
+        <span>⛔ Your POPMYC POS license has expired. {canRenew ? 'Renew to continue using all features.' : 'Contact your administrator to renew.'}</span>
+        {canRenew && (
+          <button onClick={() => navigate('/settings')} className="ml-auto shrink-0 underline font-semibold">Renew Now</button>
+        )}
         <button onClick={() => setDismissed(true)} className="shrink-0 text-white/70 hover:text-white ml-2">✕</button>
       </div>
     );
@@ -65,8 +71,10 @@ function LicenseExpiryBanner() {
     const urgent = daysLeft <= 3;
     return (
       <div className={`flex items-center gap-3 px-4 py-2.5 text-sm font-medium ${urgent ? 'bg-red-500 text-white' : 'bg-amber-400 text-amber-900'}`}>
-        <span>⚠ Your license expires in <strong>{daysLeft === 0 ? 'today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''}`}</strong>. Renew to avoid interruption.</span>
-        <button onClick={() => navigate('/settings')} className="ml-auto shrink-0 underline font-semibold">Renew</button>
+        <span>⚠ Your license expires in <strong>{daysLeft === 0 ? 'today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''}`}</strong>. {canRenew ? 'Renew to avoid interruption.' : 'Contact your administrator to renew.'}</span>
+        {canRenew && (
+          <button onClick={() => navigate('/settings')} className="ml-auto shrink-0 underline font-semibold">Renew</button>
+        )}
         <button onClick={() => setDismissed(true)} className="shrink-0 opacity-70 hover:opacity-100 ml-2">✕</button>
       </div>
     );
@@ -627,8 +635,9 @@ export function MainLayout() {
   const businessName = useSettingsStore((s) => s.business.name);
   const roleConfig   = useMemo(() => getRoleConfig(userRole), [userRole, permTick]); // eslint-disable-line
 
-  const posEnabled     = useSettingsStore((s) => s.posEnabled);
+  const posEnabled       = useSettingsStore((s) => s.posEnabled);
   const inventoryEnabled = useSettingsStore((s) => s.inventoryEnabled);
+  const isSingleBranch   = useSettingsStore((s) => s.isSingleBranch);
 
   const navGroups = useMemo(() =>
     ALL_NAV_GROUPS
@@ -637,17 +646,16 @@ export function MainLayout() {
         items: g.items.filter((i) => {
           // Role-based access first
           if (!canAccess(userRole, i.href)) return false;
-          // Operating-mode filter:
-          //   mode:'pos'       → hidden when INVENTORY_ONLY (posEnabled=false)
-          //   mode:'inventory' → hidden when POS_ONLY (inventoryEnabled=false)
-          //   no mode / 'all'  → always shown
+          // Operating-mode filter
           if (i.mode === 'pos'       && !posEnabled)       return false;
           if (i.mode === 'inventory' && !inventoryEnabled) return false;
+          // Hide Branches nav for single-branch businesses
+          if (i.href === '/branches' && isSingleBranch)    return false;
           return true;
         }),
       }))
       .filter((g) => g.items.length > 0),
-  [userRole, permTick, posEnabled, inventoryEnabled]); // eslint-disable-line
+  [userRole, permTick, posEnabled, inventoryEnabled, isSingleBranch]); // eslint-disable-line
 
   const products         = useProductStore((s) => s.products);
   const notifBranchSlice = useBranchInventoryStore(

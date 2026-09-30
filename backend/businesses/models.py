@@ -140,6 +140,22 @@ class BusinessSettings(models.Model):
         ),
     )
 
+    # ── Branch mode ────────────────────────────────────────────────────────────
+    class BranchMode(models.TextChoices):
+        SINGLE = "SINGLE", _("Single Branch")
+        MULTI  = "MULTI",  _("Multiple Branches")
+
+    branch_mode = models.CharField(
+        max_length=10,
+        choices=BranchMode.choices,
+        default=BranchMode.SINGLE,
+        verbose_name=_("Branch Mode"),
+        help_text=_(
+            "SINGLE: business has one fixed location — branch management is hidden. "
+            "MULTI: business has multiple locations — branch management is enabled."
+        ),
+    )
+
     # ── Inventory / Operating mode ─────────────────────────────────────────────
     class InventoryMode(models.TextChoices):
         # ── New three-way operating modes ─────────────────────────────────────

@@ -41,6 +41,7 @@ import { clsx } from 'clsx';
 import { useSettingsStore } from '@/stores/settings.store';
 import { useCategoryStore } from '@/stores/category.store';
 import { useBranchStore } from '@/stores/branch.store';
+import { useAuthStore } from '@/stores/auth.store';
 import api from '@/services/api';
 import { BUSINESS_CATEGORY_LABELS, NEGOTIABLE_BUSINESS_CATEGORIES, type BusinessCategory } from '@/types';
 import { useUpdater } from '@/hooks/useUpdater';
@@ -342,6 +343,10 @@ export default function SettingsPage() {
 
   // ── Updater (desktop only — web returns idle) ─────────────────────────────
   const updater = useUpdater();
+
+  // Role check — only SUPER_ADMIN and ADMIN can renew/activate licenses
+  const userRole  = useAuthStore((s) => s.user?.role ?? 'CASHIER');
+  const canRenew  = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
 
   // Derived: does current business category support negotiable pricing?
   const supportsNegotiable  = NEGOTIABLE_BUSINESS_CATEGORIES.includes(business.businessCategory);
@@ -1376,8 +1381,23 @@ export default function SettingsPage() {
                       </div>
                     )}
 
-                    {/* Activate section — show when PENDING or NO_LICENSE */}
-                    {(isPending || !isActive) && !isExpired && (
+                    {/* Non-admin notice — shown instead of renew forms for Cashier/Manager */}
+                    {!canRenew && (isExpired || (daysLeft !== null && daysLeft <= 14)) && (
+                      <div className="flex items-start gap-3 rounded-2xl bg-amber-50 border border-amber-200 px-5 py-4">
+                        <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-sm font-semibold text-amber-800">License renewal required</p>
+                          <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                            {isExpired
+                              ? 'Your license has expired. Please contact your system administrator or manager to renew.'
+                              : `Your license expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}. Contact your administrator to renew.`}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Activate section — show when PENDING or NO_LICENSE, admin only */}
+                    {(isPending || !isActive) && !isExpired && canRenew && (
                       <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.06)] border border-muted-100 overflow-hidden">
                         <div className="px-5 py-4 border-b border-muted-100 flex items-center gap-2">
                           <Key className="h-4 w-4 text-muted-500" />
@@ -1407,8 +1427,8 @@ export default function SettingsPage() {
                       </div>
                     )}
 
-                    {/* Renew section — show when ACTIVE or EXPIRED subscription */}
-                    {!isLifetime && (isActive || isExpired) && (
+                    {/* Renew section — show when ACTIVE or EXPIRED subscription, admin only */}
+                    {!isLifetime && (isActive || isExpired) && canRenew && (
                       <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.06)] border border-muted-100 overflow-hidden">
                         <div className="px-5 py-4 border-b border-muted-100 flex items-center gap-2">
                           <RefreshCw className="h-4 w-4 text-muted-500" />
