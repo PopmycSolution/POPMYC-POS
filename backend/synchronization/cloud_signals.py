@@ -58,27 +58,22 @@ def _queue_sync_record(instance, action: str) -> None:
         if (app_label, model_name) not in SYNC_ENTITY_ALLOWLIST:
             return  # not syncable — skip silently
 
-        # Resolve business_id from the instance
+        # Resolve business_id from the instance — try every common pattern.
         business_id = None
         try:
-            if hasattr(instance, "business_id") and instance.business_id:
-                business_id = instance.business_id
-            elif hasattr(instance, "business") and instance.business_id:
-                business_id = instance.business.id
+            # Direct business_id attribute (most models)
+            val = getattr(instance, "business_id", None)
+            if val:
+                business_id = val
         except Exception:
             pass
 
-        # For License, business_id is via the FK
-        if business_id is None and app_label == "licensing" and model_name == "license":
+        if business_id is None:
             try:
-                business_id = instance.business_id
-            except Exception:
-                pass
-
-        # For BusinessSettings, business_id is via the FK
-        if business_id is None and app_label == "businesses" and model_name == "businesssettings":
-            try:
-                business_id = instance.business_id
+                # Related object .business.id (fallback for unusual mappings)
+                biz = getattr(instance, "business", None)
+                if biz is not None:
+                    business_id = getattr(biz, "id", None) or getattr(biz, "pk", None)
             except Exception:
                 pass
 

@@ -15,10 +15,12 @@ import { Building2, ChevronDown, Check, Globe } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuthStore } from '@/stores/auth.store';
 import { useBranchStore } from '@/stores/branch.store';
+import { useSettingsStore } from '@/stores/settings.store';
 
 export function BranchSwitcher() {
   const user            = useAuthStore((s) => s.user);
   const { branches, activeBranchId, setActiveBranch } = useBranchStore();
+  const isSingleBranch  = useSettingsStore((s) => s.isSingleBranch);
 
   const [open, setOpen] = useState(false);
   const ref             = useRef<HTMLDivElement>(null);
@@ -36,6 +38,9 @@ export function BranchSwitcher() {
 
   // ── Non-admin roles: render nothing ────────────────────────────────────────
   if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') return null;
+
+  // ── Single branch mode: no branch switcher needed ──────────────────────────
+  if (isSingleBranch) return null;
 
   // ── Admin: show their branch name only (read-only) ─────────────────────────
   if (role === 'ADMIN') {

@@ -37,6 +37,8 @@ export interface SetupPayload {
     email: string;
     currency: string;
     currency_symbol: string;
+    /** Operating mode set during wizard — locked post-setup (except by cloud admin) */
+    inventory_mode?: 'FULL_POS' | 'INVENTORY_ONLY' | 'POS_ONLY';
   };
   branch: {
     name: string;

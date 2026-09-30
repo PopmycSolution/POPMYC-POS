@@ -39,11 +39,10 @@ import { useState, useRef, useEffect, useCallback } from 'react';import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useSettingsStore } from '@/stores/settings.store';
-import { useCategoryStore } from '@/stores/category.store';
 import { useBranchStore } from '@/stores/branch.store';
 import { useAuthStore } from '@/stores/auth.store';
 import api from '@/services/api';
-import { BUSINESS_CATEGORY_LABELS, NEGOTIABLE_BUSINESS_CATEGORIES, type BusinessCategory } from '@/types';
+import { BUSINESS_CATEGORY_LABELS, NEGOTIABLE_BUSINESS_CATEGORIES } from '@/types';
 import { useUpdater } from '@/hooks/useUpdater';
 
 type SettingsSection = 'general' | 'receipt' | 'tax' | 'payments' | 'pricing' | 'inventory' | 'notifications' | 'subscription' | 'about' | 'backup';
@@ -60,11 +59,6 @@ const sections: { id: SettingsSection; label: string; icon: typeof Settings; des
   { id: 'backup',        label: 'Backup',            icon: Server,      description: 'Database backup & recovery' },
   { id: 'about',         label: 'About & Updates',   icon: Zap,         description: 'App version & updates' },
 ];
-
-const BUSINESS_CATEGORY_OPTIONS = (Object.keys(BUSINESS_CATEGORY_LABELS) as BusinessCategory[]).map((k) => ({
-  value: k,
-  label: BUSINESS_CATEGORY_LABELS[k],
-}));
 
 const WEEK_DAYS = [
   { value: 'MON', label: 'Monday' },
@@ -339,7 +333,6 @@ export default function SettingsPage() {
   const updateInventory     = useSettingsStore((s) => s.updateInventory);
   const togglePaymentMethod = useSettingsStore((s) => s.togglePaymentMethod);
   const updateEmail         = useSettingsStore((s) => s.updateEmailNotifications);
-  const seedCategories      = useCategoryStore((s) => s.seedForBusinessType);
 
   // ── Updater (desktop only — web returns idle) ─────────────────────────────
   const updater = useUpdater();
@@ -377,19 +370,15 @@ export default function SettingsPage() {
         : ((listRes.data as { results?: { id: string }[] }).results ?? []);
       const bizId = list[0]?.id;
       if (bizId) {
-        // PATCH text fields only.
-        // The logo field is an ImageField on the backend — uploading a base64
-        // string via PATCH would fail. Logo uploads require a separate multipart
-        // form POST which the user can do via the Media/Logo upload flow.
+        // PATCH only the fields that are editable by Admin/Owner.
+        // Business Category, Currency, and Currency Symbol are locked post-setup.
+        // Logo uploads require a separate multipart form POST.
         await api.patch(`/businesses/${bizId}/`, {
-          name:              business.name,
-          business_category: business.businessCategory,
-          address:           business.address,
-          phone:             business.phone,
-          email:             business.email,
-          currency:          business.currency,
-          currency_symbol:   business.currencySymbol,
-          tin:               business.tin,
+          name:    business.name,
+          address: business.address,
+          phone:   business.phone,
+          email:   business.email,
+          tin:     business.tin,
         });
       }
     } catch {
@@ -462,21 +451,11 @@ export default function SettingsPage() {
                     <input value={business.name} onChange={(e) => updateBusiness({ name: e.target.value })} className={inputClass} />
                   </SettingField>
                   <SettingField label="Business Category" icon={Store}
-                    hint="Controls pricing behaviour — e.g. Phone & Accessories enables negotiable pricing. Changing this will update default product categories.">
-                    <select
-                      value={business.businessCategory}
-                      onChange={(e) => {
-                        const cat = e.target.value as BusinessCategory;
-                        updateBusiness({ businessCategory: cat });
-                        // Swap product categories to match the new business type
-                        seedCategories(cat);
-                      }}
-                      className={inputClass}
-                    >
-                      {BUSINESS_CATEGORY_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
+                    hint="Locked — can only be changed by your POPMYC administrator.">
+                    <div className={inputClass + ' flex items-center bg-muted-50 text-muted-500 cursor-not-allowed select-none'}>
+                      {BUSINESS_CATEGORY_LABELS[business.businessCategory] ?? business.businessCategory}
+                      <Lock className="ml-auto h-3.5 w-3.5 text-muted-300 shrink-0" />
+                    </div>
                   </SettingField>
                   <SettingField label="Phone" icon={Phone}>
                     <input value={business.phone} onChange={(e) => updateBusiness({ phone: e.target.value })} className={inputClass} />
@@ -490,12 +469,28 @@ export default function SettingsPage() {
                   <SettingField label="TIN (Tax ID)" icon={Hash}>
                     <input value={business.tin} onChange={(e) => updateBusiness({ tin: e.target.value })} className={inputClass} />
                   </SettingField>
-                  <SettingField label="Currency" icon={Globe}>
-                    <input value={business.currency} onChange={(e) => updateBusiness({ currency: e.target.value })} className={inputClass} />
+                  <SettingField label="Currency" icon={Globe}
+                    hint="Locked — contact your POPMYC administrator to change currency.">
+                    <div className={inputClass + ' flex items-center bg-muted-50 text-muted-500 cursor-not-allowed select-none'}>
+                      {business.currency}
+                      <Lock className="ml-auto h-3.5 w-3.5 text-muted-300 shrink-0" />
+                    </div>
                   </SettingField>
-                  <SettingField label="Currency Symbol">
-                    <input value={business.currencySymbol} onChange={(e) => updateBusiness({ currencySymbol: e.target.value })} className={inputClass} />
+                  <SettingField label="Currency Symbol"
+                    hint="Locked — contact your POPMYC administrator to change.">
+                    <div className={inputClass + ' flex items-center bg-muted-50 text-muted-500 cursor-not-allowed select-none'}>
+                      {business.currencySymbol}
+                      <Lock className="ml-auto h-3.5 w-3.5 text-muted-300 shrink-0" />
+                    </div>
                   </SettingField>
+                </div>
+                {/* Locked fields notice */}
+                <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
+                  <Lock className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-700 leading-relaxed">
+                    <strong>Business Category, Currency and Currency Symbol</strong> are locked after setup.
+                    To change them, contact your POPMYC administrator.
+                  </p>
                 </div>
                 <div className="flex justify-end pt-2"><SaveButton onClick={saveGeneral} /></div>
               </div>
@@ -1536,13 +1531,21 @@ export default function SettingsPage() {
                         <div>
                           <p className="text-sm font-bold text-[#1E293B]">POPMYC Support</p>
                           <p className="text-xs text-muted-500 mt-0.5 leading-relaxed">
-                            To purchase a new subscription or renewal code, contact POPMYC support.
+                            To subscribe or purchase a renewal code, contact POPMYC support.
                             Activation codes are single-use and tied to your business account.
                           </p>
                           <div className="flex flex-wrap gap-3 mt-3">
-                            <a href="mailto:support@popmyc.com"
+                            <a href="tel:0247071869"
                               className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700">
-                              <Mail className="h-3.5 w-3.5" /> support@popmyc.com
+                              <Phone className="h-3.5 w-3.5" /> 0247071869
+                            </a>
+                            <a href="tel:0256251295"
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700">
+                              <Phone className="h-3.5 w-3.5" /> 0256251295
+                            </a>
+                            <a href="mailto:popmychubsolution@gmail.com"
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700">
+                              <Mail className="h-3.5 w-3.5" /> popmychubsolution@gmail.com
                             </a>
                           </div>
                         </div>
@@ -1575,7 +1578,7 @@ export default function SettingsPage() {
                       { label: 'Application', value: 'POPMYC POS' },
                       { label: 'Version',     value: updater.version && updater.version !== '—' ? `v${updater.version}` : 'v1.0.0' },
                       { label: 'Publisher',   value: 'POPMyC Solutions' },
-                      { label: 'Support',     value: '0256251295 / 0598610304' },
+                      { label: 'Support',     value: '0247071869 / 0256251295' },
                     ].map(({ label, value }) => (
                       <div key={label} className="rounded-xl bg-muted-50 border border-muted-100 px-4 py-3">
                         <p className="text-[10px] text-muted-400 font-semibold uppercase tracking-widest">{label}</p>

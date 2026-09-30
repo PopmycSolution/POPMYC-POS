@@ -118,6 +118,7 @@ export default function SetupWizard() {
   const [bizEmail, setBizEmail]         = useState('');
   const [bizCurrency, setBizCurrency]   = useState('GHS');
   const [bizCurrSymbol, setBizCurrSymbol] = useState('GH₵');
+  const [operatingMode, setOperatingMode] = useState<'FULL_POS' | 'INVENTORY_ONLY' | 'POS_ONLY'>('FULL_POS');
 
   // Step 3 — Branch
   const [branchMode, setBranchMode] = useState<'SINGLE' | 'MULTI'>('SINGLE');
@@ -244,6 +245,7 @@ export default function SetupWizard() {
         email:             bizEmail.trim(),
         currency:          bizCurrency.trim() || 'GHS',
         currency_symbol:   bizCurrSymbol.trim() || 'GH₵',
+        inventory_mode:    operatingMode,
       },
       branch: {
         name: branchName.trim(),
@@ -557,6 +559,58 @@ export default function SetupWizard() {
                     <label className="label">Symbol</label>
                     <input className={inputCls()} value={bizCurrSymbol}
                            onChange={e => setBizCurrSymbol(e.target.value)} placeholder="GH₵" maxLength={5} />
+                  </div>
+                </div>
+
+                {/* Operating Mode */}
+                <div>
+                  <label className="label" style={{ display: 'block', marginBottom: 6 }}>
+                    Operating Mode <Req />
+                  </label>
+                  <p className="text-[11px] text-slate-400 mb-3">
+                    Choose how your business uses POPMYC POS. This can only be changed by your POPMYC administrator.
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {([
+                      {
+                        value: 'FULL_POS' as const,
+                        label: 'Full POS + Inventory',
+                        desc: 'Sales, checkout, stock tracking, and purchases — everything.',
+                      },
+                      {
+                        value: 'INVENTORY_ONLY' as const,
+                        label: 'Inventory / Stock Only',
+                        desc: 'Manage stock and purchases. No POS checkout or new sales.',
+                      },
+                      {
+                        value: 'POS_ONLY' as const,
+                        label: 'POS / Sales Only',
+                        desc: 'Full checkout and sales. Stock tracking and inventory hidden.',
+                      },
+                    ] as const).map(({ value, label, desc }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setOperatingMode(value)}
+                        className={clsx(
+                          'flex items-start gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all',
+                          operatingMode === value
+                            ? 'border-teal-500 bg-teal-50'
+                            : 'border-slate-200 bg-white hover:border-slate-300',
+                        )}
+                      >
+                        <div className={clsx(
+                          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2',
+                          operatingMode === value ? 'border-teal-500 bg-teal-500' : 'border-slate-300',
+                        )}>
+                          {operatingMode === value && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                        </div>
+                        <div>
+                          <p className={clsx('text-sm font-bold', operatingMode === value ? 'text-teal-700' : 'text-slate-700')}>{label}</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">{desc}</p>
+                        </div>
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>

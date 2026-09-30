@@ -374,7 +374,13 @@ class SyncModelApplier:
             setattr(instance, field_name, value)
 
         if fields:
-            instance.save(update_fields=list(fields.keys()))
+            # Always include updated_at in update_fields so the auto_now
+            # timestamp fires even on partial saves — without it, Django
+            # skips the auto_now column when update_fields is explicit.
+            update_field_set = set(fields.keys())
+            if hasattr(instance, "updated_at"):
+                update_field_set.add("updated_at")
+            instance.save(update_fields=list(update_field_set))
 
         return instance
 

@@ -411,7 +411,7 @@ export function DashboardPage() {
           <div className="mt-4 pt-3 shrink-0" style={{ borderTop:'1px solid var(--border-card)' }}>
             <div className="flex items-center gap-1.5 text-[10px] text-page-muted mb-1">
               <Phone className="h-3 w-3 shrink-0" />
-              <span>Support: <span className="font-semibold text-page-secondary">0256251295</span></span>
+              <span>Support: <span className="font-semibold text-page-secondary">0247071869 / 0256251295</span></span>
             </div>
             <p className="text-[10px] text-page-muted">{APP_NAME} · Powered by POPMYC</p>
           </div>

@@ -107,6 +107,12 @@ class BusinessAdmin(admin.ModelAdmin):
     fieldsets = (
         ("Identity", {
             "fields": ("id", "name", "business_category", "is_active"),
+            "description": (
+                "⚡ Changing <strong>Business Category</strong> here will automatically push "
+                "the update to the customer's local POS on the next sync cycle (~60 s). "
+                "To change <strong>Operating Mode</strong> or <strong>Branch Mode</strong>, "
+                "edit the linked Business Settings record instead."
+            ),
         }),
         ("Contact", {
             "fields": ("address", "phone", "email", "tin"),
@@ -332,8 +338,54 @@ class BusinessAdmin(admin.ModelAdmin):
 
 @admin.register(BusinessSettings)
 class BusinessSettingsAdmin(admin.ModelAdmin):
-    list_display    = ("business", "inventory_mode", "allow_cashier_price_negotiation", "updated_at")
-    list_filter     = ("inventory_mode", "allow_cashier_price_negotiation")
+    list_display    = (
+        "business_name",
+        "business_category_display",
+        "inventory_mode",
+        "branch_mode",
+        "allow_cashier_price_negotiation",
+        "updated_at",
+    )
+    list_filter     = ("inventory_mode", "branch_mode", "allow_cashier_price_negotiation")
     search_fields   = ("business__name",)
-    readonly_fields = ("id", "created_at", "updated_at")
+    readonly_fields = ("id", "business", "created_at", "updated_at")
     raw_id_fields   = ("business",)
+
+    fieldsets = (
+        ("Business", {
+            "fields": ("id", "business"),
+            "description": (
+                "Changing <strong>inventory_mode</strong> or <strong>branch_mode</strong> here "
+                "will automatically push the new value to the customer's local POS on the next "
+                "sync cycle (within ~60 seconds)."
+            ),
+        }),
+        ("Operating Mode", {
+            "fields": ("inventory_mode", "branch_mode"),
+        }),
+        ("Pricing", {
+            "fields": ("allow_cashier_price_negotiation",),
+        }),
+        ("JSON Config (advanced)", {
+            "fields": ("tax_config", "receipt_config", "inventory_config"),
+            "classes": ("collapse",),
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    @admin.display(description="Business", ordering="business__name")
+    def business_name(self, obj):
+        try:
+            return obj.business.name
+        except Exception:
+            return "—"
+
+    @admin.display(description="Category", ordering="business__business_category")
+    def business_category_display(self, obj):
+        try:
+            biz = obj.business
+            return biz.get_business_category_display() if hasattr(biz, "get_business_category_display") else (biz.business_category or "—")
+        except Exception:
+            return "—"

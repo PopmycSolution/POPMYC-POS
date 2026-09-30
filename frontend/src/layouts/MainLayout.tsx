@@ -651,6 +651,8 @@ export function MainLayout() {
           if (i.mode === 'inventory' && !inventoryEnabled) return false;
           // Hide Branches nav for single-branch businesses
           if (i.href === '/branches' && isSingleBranch)    return false;
+          // Hide Branch Transfers for single-branch businesses
+          if (i.href === '/inventory/transfers' && isSingleBranch) return false;
           return true;
         }),
       }))

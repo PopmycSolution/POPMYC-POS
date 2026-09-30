@@ -390,6 +390,8 @@ class SyncUploadView(APIView):
 
                 # ---------------------------------------------------------
                 # Verify that the device is registered and active.
+                # Auto-register on first upload when using the shared
+                # SYNC_CLOUD_TOKEN (trusted local POS installation).
                 # ---------------------------------------------------------
                 device = SyncDevice.objects.filter(
                     device_id=device_uuid,
@@ -397,9 +399,25 @@ class SyncUploadView(APIView):
                 ).first()
 
                 if not device:
-                    raise ValueError(
-                        "Synchronization device is not registered or is inactive."
-                    )
+                    # Auto-register if the request used the shared sync token
+                    _user = getattr(request, "user", None)
+                    if isinstance(_user, _SyncTokenUser):
+                        device, _created = SyncDevice.objects.get_or_create(
+                            device_id=device_uuid,
+                            defaults={
+                                "name":        f"Auto-registered device {str(device_uuid)[:8]}",
+                                "business_id": business_uuid,
+                                "branch_id":   branch_uuid,
+                                "is_active":   True,
+                            },
+                        )
+                        if not _created and not device.is_active:
+                            device.is_active = True
+                            device.save(update_fields=["is_active", "updated_at"])
+                    else:
+                        raise ValueError(
+                            "Synchronization device is not registered or is inactive."
+                        )
 
                 # ---------------------------------------------------------
                 # Validate business against registered device.
@@ -682,8 +700,21 @@ class SyncDownloadView(APIView):
                 auth_business_id = client_biz_uuid
 
         # ── Step 4: require a valid business context ────────────────────────────
-        # If after all the above we still have no business context,
-        # refuse the request.  We never return records from all businesses.
+        # For shared SYNC_CLOUD_TOKEN requests the device may not be registered
+        # yet (first sync cycle after install).  In that case accept the
+        # client-supplied ?business_id directly — the token already proves the
+        # caller is a trusted local POS installation.
+        from django.contrib.auth.models import AnonymousUser as _AnonUser
+        user = getattr(request, "user", None)
+        is_sync_token_user = isinstance(user, _SyncTokenUser)
+
+        if auth_business_id is None and is_sync_token_user and client_business_id:
+            try:
+                auth_business_id = UUID(str(client_business_id))
+            except (ValueError, TypeError):
+                pass
+
+        # If after all the above we still have no business context, refuse.
         if auth_business_id is None:
             return Response(
                 {

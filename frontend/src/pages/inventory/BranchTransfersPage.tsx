@@ -885,6 +885,21 @@ export default function BranchTransfersPage() {
   }, [transfers, listSearch]);
 
   // ── Guards ─────────────────────────────────────────────────────────────────
+  const isSingleBranch = useSettingsStore((s) => s.isSingleBranch);
+  if (isSingleBranch) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4 text-center px-6">
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 border border-amber-200">
+          <ArrowLeftRight className="h-8 w-8 text-amber-500" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-800">Branch Transfers Not Available</h2>
+        <p className="text-sm text-slate-500 max-w-sm leading-relaxed">
+          Your business is configured as a <strong>single location</strong>. Branch transfers are only available for
+          businesses with multiple branches.
+        </p>
+      </div>
+    );
+  }
   if (!stockEnabled) return <StockDisabledGuard />;
 
   if (!canTransfer) {

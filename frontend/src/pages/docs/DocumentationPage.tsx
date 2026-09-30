@@ -31,7 +31,7 @@ import { APP_NAME } from '@/utils/constants';
 // ─── Owner / Support contact ────────────────────────────────────────────────
 const SUPPORT = {
   company:  'POPMYC Solutions',
-  phones:   ['0256251295', '0598610304'],
+  phones:   ['0247071869', '0256251295'],
   email:    'popmychubsolution@gmail.com',
   website:  'https://popmyc.com',
   location: 'Accra, Ghana',
