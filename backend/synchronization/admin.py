@@ -2,21 +2,11 @@
 synchronization/admin.py
 ========================
 Django admin for the synchronization models.
-
-Stage 6.2C: registered SyncRecord, SyncDevice, and the new SyncConflictLog.
-
-POPMYC administrators can inspect:
-  - SyncRecord queue state and errors
-  - SyncDevice registrations (and their sync_checkpoint cursor)
-  - SyncConflictLog entries for manual resolution
-
-Security: SyncRecord payload is shown in read-only form. No tokens,
-passwords, or activation codes should appear in payloads (enforced by
-the _NEVER_SYNC_FIELDS list in model_applier.py).
 """
 
 from django.contrib import admin
 from django.utils.html import format_html
+from django.utils import timezone
 
 from .models import SyncConflictLog, SyncDevice, SyncRecord
 
@@ -26,33 +16,34 @@ from .models import SyncConflictLog, SyncDevice, SyncRecord
 @admin.register(SyncRecord)
 class SyncRecordAdmin(admin.ModelAdmin):
     list_display = (
-        "id",
+        "id_short",
         "app_model",
-        "record_id",
+        "record_id_short",
         "action",
         "status_badge",
         "version",
         "attempts",
-        "business_id",
-        "device_id",
+        "business_id_short",
         "created_at",
+        "updated_at",
         "synced_at",
     )
-    list_filter  = ("status", "action", "app_label")
+    list_filter   = ("status", "action", "app_label")
     search_fields = ("record_id", "business_id", "device_id", "app_label", "model_name")
     readonly_fields = (
         "id", "record_id", "app_label", "model_name", "device_id",
         "business_id", "branch_id", "action", "version", "payload",
         "attempts", "last_error", "created_at", "updated_at", "synced_at",
     )
-    ordering     = ("-created_at",)
+    ordering       = ("-updated_at",)   # most recently touched first
     date_hierarchy = "created_at"
+    actions        = ["requeue_failed", "mark_synced_now"]
 
     fieldsets = (
-        ("Identity", {"fields": ("id", "record_id", "app_label", "model_name", "action")}),
-        ("Context",  {"fields": ("device_id", "business_id", "branch_id")}),
-        ("State",    {"fields": ("status", "version", "attempts", "last_error")}),
-        ("Payload",  {"fields": ("payload",), "classes": ("collapse",)}),
+        ("Identity",   {"fields": ("id", "record_id", "app_label", "model_name", "action")}),
+        ("Context",    {"fields": ("device_id", "business_id", "branch_id")}),
+        ("State",      {"fields": ("status", "version", "attempts", "last_error")}),
+        ("Payload",    {"fields": ("payload",), "classes": ("collapse",)}),
         ("Timestamps", {"fields": ("created_at", "updated_at", "synced_at")}),
     )
 
@@ -62,6 +53,20 @@ class SyncRecordAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         return False
 
+    @admin.display(description="ID (short)")
+    def id_short(self, obj):
+        return str(obj.id)[:8] + "…"
+
+    @admin.display(description="Record ID")
+    def record_id_short(self, obj):
+        return str(obj.record_id)[:8] + "…"
+
+    @admin.display(description="Business")
+    def business_id_short(self, obj):
+        if not obj.business_id:
+            return "—"
+        return str(obj.business_id)[:8] + "…"
+
     @admin.display(description="Model")
     def app_model(self, obj):
         return f"{obj.app_label}.{obj.model_name}"
@@ -69,17 +74,34 @@ class SyncRecordAdmin(admin.ModelAdmin):
     @admin.display(description="Status")
     def status_badge(self, obj):
         colours = {
-            "pending":  "gray",
-            "syncing":  "blue",
-            "synced":   "green",
-            "failed":   "red",
-            "conflict": "orange",
+            "pending":  ("#6b7280", "⏳"),
+            "syncing":  ("#3b82f6", "🔄"),
+            "synced":   ("#16a34a", "✅"),
+            "failed":   ("#dc2626", "❌"),
+            "conflict": ("#f59e0b", "⚠️"),
         }
+        colour, icon = colours.get(obj.status, ("#000", "•"))
         return format_html(
-            '<span style="color:{};font-weight:bold">&#9679; {}</span>',
-            colours.get(obj.status, "black"),
-            obj.status,
+            '<span style="color:{};font-weight:700">{} {}</span>',
+            colour, icon, obj.status,
         )
+
+    @admin.action(description="🔄 Re-queue selected records (reset to pending)")
+    def requeue_failed(self, request, queryset):
+        updated = queryset.update(
+            status=SyncRecord.STATUS_PENDING,
+            attempts=0,
+            last_error="",
+        )
+        self.message_user(request, f"✅ {updated} record(s) reset to pending — will be picked up on next sync.")
+
+    @admin.action(description="✅ Mark selected as synced (force)")
+    def mark_synced_now(self, request, queryset):
+        updated = queryset.update(
+            status=SyncRecord.STATUS_SYNCED,
+            synced_at=timezone.now(),
+        )
+        self.message_user(request, f"✅ {updated} record(s) marked as synced.")
 
 
 # ── SyncDevice ────────────────────────────────────────────────────────────────
@@ -95,14 +117,16 @@ class SyncDeviceAdmin(admin.ModelAdmin):
         "last_sync_at",
         "sync_checkpoint",
         "created_at",
+        "updated_at",
     )
-    list_filter  = ("is_active",)
+    list_filter   = ("is_active",)
     search_fields = ("name", "device_id", "business_id")
     readonly_fields = (
         "id", "device_id", "created_at", "updated_at",
         "last_sync_at", "sync_checkpoint",
     )
-    ordering     = ("-created_at",)
+    ordering = ("-updated_at",)
+    actions  = ["reset_sync_cursor"]
 
     fieldsets = (
         ("Identity",    {"fields": ("id", "device_id", "name", "is_active")}),
@@ -110,6 +134,11 @@ class SyncDeviceAdmin(admin.ModelAdmin):
         ("Sync cursor", {"fields": ("last_sync_at", "sync_checkpoint")}),
         ("Timestamps",  {"fields": ("created_at", "updated_at")}),
     )
+
+    @admin.action(description="🔁 Reset sync cursor (force full re-download on next sync)")
+    def reset_sync_cursor(self, request, queryset):
+        updated = queryset.update(last_sync_at=None, sync_checkpoint=None)
+        self.message_user(request, f"✅ Sync cursor reset for {updated} device(s). They will re-download all records on next sync.")
 
 
 # ── SyncConflictLog ───────────────────────────────────────────────────────────
@@ -126,7 +155,7 @@ class SyncConflictLogAdmin(admin.ModelAdmin):
         "business_id",
         "device_id",
     )
-    list_filter  = ("resolution", "app_label")
+    list_filter   = ("resolution", "app_label")
     search_fields = ("record_id", "business_id", "device_id", "app_label", "model_name")
     readonly_fields = (
         "id", "record_id", "app_label", "model_name",
@@ -135,15 +164,13 @@ class SyncConflictLogAdmin(admin.ModelAdmin):
         "server_version", "server_payload",
         "resolution", "sync_record_id", "created_at",
     )
-    ordering     = ("-created_at",)
+    ordering       = ("-created_at",)
     date_hierarchy = "created_at"
 
     fieldsets = (
-        ("Record",   {"fields": ("id", "record_id", "app_label", "model_name")}),
-        ("Context",  {"fields": ("business_id", "branch_id", "device_id", "sync_record_id")}),
-        ("Conflict", {
-            "fields": ("client_version", "client_payload", "server_version", "server_payload"),
-        }),
+        ("Record",     {"fields": ("id", "record_id", "app_label", "model_name")}),
+        ("Context",    {"fields": ("business_id", "branch_id", "device_id", "sync_record_id")}),
+        ("Conflict",   {"fields": ("client_version", "client_payload", "server_version", "server_payload")}),
         ("Resolution", {"fields": ("resolution",)}),
         ("Timestamps", {"fields": ("created_at",)}),
     )
@@ -152,11 +179,9 @@ class SyncConflictLogAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
-        # Allow changing resolution status only
         return True
 
     def get_readonly_fields(self, request, obj=None):
-        # Everything is read-only except resolution
         all_ro = list(self.readonly_fields)
         if obj:
             return [f for f in all_ro if f != "resolution"]
@@ -169,13 +194,13 @@ class SyncConflictLogAdmin(admin.ModelAdmin):
     @admin.display(description="Resolution")
     def resolution_badge(self, obj):
         colours = {
-            "server_wins": "green",
-            "client_wins": "blue",
-            "manual":      "purple",
-            "deferred":    "orange",
+            "server_wins": "#16a34a",
+            "client_wins": "#3b82f6",
+            "manual":      "#7c3aed",
+            "deferred":    "#f59e0b",
         }
         return format_html(
-            '<span style="color:{};font-weight:bold">{}</span>',
-            colours.get(obj.resolution, "black"),
+            '<span style="color:{};font-weight:700">{}</span>',
+            colours.get(obj.resolution, "#000"),
             obj.get_resolution_display(),
         )

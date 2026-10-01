@@ -163,21 +163,61 @@ export default function UsersPage() {
         const branchRecord = branches.find(
           (b) => b.name === (formData.branch || defaultBranch)
         );
-        await api.post('/accounts/users/', {
-          username:    formData.username,
-          first_name:  formData.firstName,
-          last_name:   formData.lastName,
-          email:       formData.email       || '',
-          phone_number: formData.phone      || '',
-          is_staff:    isStaff,
+
+        // Step 1: create user in local backend DB
+        const createRes = await api.post<{
+          id?: string; username?: string; email?: string;
+          first_name?: string; last_name?: string;
+        }>('/accounts/users/', {
+          username:     formData.username,
+          first_name:   formData.firstName,
+          last_name:    formData.lastName,
+          email:        formData.email       || '',
+          phone_number: formData.phone       || '',
+          is_staff:     isStaff,
           is_superuser: isSuperuser,
-          is_active:   true,
-          branch:      branchRecord?.id ?? null,
+          is_active:    true,
+          branch:       branchRecord?.id ?? null,
           ...(formData.password ? { password: formData.password } : {}),
         });
+
+        // Step 2: for Admin/SuperAdmin — also push to cloud so Django admin shows them
+        if ((isStaff || isSuperuser) && createRes.data?.id) {
+          const newUser = createRes.data;
+          // Read business info from settings store for the cloud payload
+          const { useSettingsStore } = await import('@/stores/settings.store');
+          const businessState = useSettingsStore.getState().business;
+
+          // Get business UUID from backend
+          const bizRes = await api.get<{ results?: { id: string }[] } | { id: string }[]>('/businesses/');
+          const bizList = Array.isArray(bizRes.data)
+            ? (bizRes.data as { id: string }[])
+            : ((bizRes.data as { results?: { id: string }[] }).results ?? []);
+          const bizId = bizList[0]?.id;
+
+          if (bizId) {
+            // Push to Render cloud registration endpoint (same one used during setup)
+            // This is fire-and-forget — failure doesn't block the UI
+            const CLOUD_URL = (import.meta.env.VITE_CLOUD_URL as string | undefined)
+              || 'https://popmyc-pos.onrender.com';
+            fetch(`${CLOUD_URL}/api/v1/cloud/trial/register-business/`, {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({
+                business_id:    bizId,
+                name:           businessState.name,
+                business_category: businessState.businessCategory,
+                admin_id:       newUser.id,
+                admin_username: newUser.username ?? formData.username,
+                admin_email:    newUser.email    ?? formData.email,
+                admin_first_name: newUser.first_name ?? formData.firstName,
+                admin_last_name:  newUser.last_name  ?? formData.lastName,
+              }),
+            }).catch(() => { /* non-fatal — cloud sync is best-effort */ });
+          }
+        }
       } catch {
         // Backend creation failed (offline / permission) — local store still has the user.
-        // No error shown to avoid blocking the UI for non-critical sync failures.
       }
     }
 
