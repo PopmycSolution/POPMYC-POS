@@ -525,6 +525,13 @@ function createMainWindow() {
     scheduleUpdateCheck();
   });
 
+  // Re-broadcast current update state once the page has fully loaded.
+  // This ensures React receives the state even if the update check fired
+  // before the renderer mounted (race condition on fast machines).
+  mainWindow.webContents.on('did-finish-load', () => {
+    broadcastUpdateState();
+  });
+
   mainWindow.on('closed', () => { mainWindow = null; });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -543,23 +550,18 @@ function createMainWindow() {
 
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 
-let updateInfo = null;    // available update info, or null
-let updateState = 'idle'; // 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'no-update'
+let updateInfo  = null;    // available update info, or null
+let updateState = 'idle';  // 'idle'|'checking'|'available'|'downloading'|'ready'|'error'|'no-update'
+let updateProgress = null; // download progress object
 
 function scheduleUpdateCheck() {
-  // Check 10 seconds after startup so it doesn't slow initial load,
-  // then every 4 hours.
-  setTimeout(() => checkForUpdates(), 10_000);
+  // First check: 15 seconds after window shows (gives React time to mount).
+  // Subsequent checks: every 4 hours.
+  setTimeout(() => checkForUpdates(), 15_000);
   setInterval(() => checkForUpdates(), 4 * 60 * 60 * 1000);
 }
 
 async function checkForUpdates() {
-  if (!UPDATE_FEED_URL) {
-    // No update server configured — silently skip
-    updateState = 'no-update';
-    broadcastUpdateState();
-    return;
-  }
   if (IS_DEV) {
     updateState = 'no-update';
     broadcastUpdateState();
@@ -568,23 +570,34 @@ async function checkForUpdates() {
 
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload    = true;   // download automatically; notify user when ready
+
+    // IMPORTANT: autoDownload = false so the user can choose Update Now or Later
+    autoUpdater.autoDownload         = false;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.channel         = _UPDATE_CHANNEL;   // 'latest' or 'beta'
-    autoUpdater.allowPrerelease = (_UPDATE_CHANNEL === 'beta');
-    autoUpdater.setFeedURL({ provider: 'github', owner: _GH_OWNER, repo: _GH_REPO, channel: _UPDATE_CHANNEL });
+    autoUpdater.channel              = _UPDATE_CHANNEL;
+    autoUpdater.allowPrerelease      = (_UPDATE_CHANNEL === 'beta');
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner:    _GH_OWNER,
+      repo:     _GH_REPO,
+      channel:  _UPDATE_CHANNEL,
+    });
 
     autoUpdater.removeAllListeners();
 
     autoUpdater.on('checking-for-update', () => {
       updateState = 'checking';
+      updateProgress = null;
       broadcastUpdateState();
     });
 
     autoUpdater.on('update-available', (info) => {
-      updateInfo = info;
+      updateInfo  = info;
       updateState = 'available';
       broadcastUpdateState();
+      // Show a native OS dialog — works even on v1.0.0 customers who never had
+      // the React toast because this runs in the MAIN process, not the renderer.
+      showUpdateDialog(info);
     });
 
     autoUpdater.on('update-not-available', () => {
@@ -593,18 +606,21 @@ async function checkForUpdates() {
     });
 
     autoUpdater.on('download-progress', (progress) => {
-      updateState = 'downloading';
-      broadcastUpdateState(progress);
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      updateInfo = info;
-      updateState = 'ready';
+      updateState    = 'downloading';
+      updateProgress = progress;
       broadcastUpdateState();
     });
 
+    autoUpdater.on('update-downloaded', (info) => {
+      updateInfo     = info;
+      updateState    = 'ready';
+      updateProgress = null;
+      broadcastUpdateState();
+      // Show another dialog offering to install immediately
+      showInstallDialog(info);
+    });
+
     autoUpdater.on('error', (err) => {
-      // Network errors during update check must NEVER block the POS
       console.log('[Updater] Non-critical update error:', err.message);
       updateState = 'error';
       broadcastUpdateState();
@@ -615,20 +631,75 @@ async function checkForUpdates() {
     await autoUpdater.checkForUpdates();
 
   } catch (err) {
-    // electron-updater may not be installed in dev; fail silently
     console.log('[Updater] Not available:', err.message);
     updateState = 'no-update';
     broadcastUpdateState();
   }
 }
 
+/**
+ * Native dialog shown immediately when an update is found.
+ * Works on every installed version including v1.0.0 — no React required.
+ */
+async function showUpdateDialog(info) {
+  if (!mainWindow) return;
+  const versionText = info?.version ? `v${info.version}` : 'a new version';
+  const result = await dialog.showMessageBox(mainWindow, {
+    type:      'info',
+    title:     `${APP_NAME} — Update Available`,
+    message:   `${APP_NAME} ${versionText} is available`,
+    detail:    `You are currently on v${APP_VERSION}.\n\nWould you like to download and install the update now? It only takes about 30 seconds.\n\nYour business data is never affected by updates.`,
+    buttons:   ['Update Now', 'Later'],
+    defaultId: 0,
+    cancelId:  1,
+    icon:      path.join(__dirname, 'resources', 'icon.ico'),
+  });
+
+  if (result.response === 0) {
+    // User chose "Update Now" — start download
+    try {
+      const { autoUpdater } = require('electron-updater');
+      await autoUpdater.downloadUpdate();
+    } catch (err) {
+      console.error('[Updater] Download failed:', err.message);
+    }
+  }
+}
+
+/**
+ * Native dialog shown when download completes and update is ready to install.
+ */
+async function showInstallDialog(info) {
+  if (!mainWindow) return;
+  const versionText = info?.version ? `v${info.version}` : 'the update';
+  const result = await dialog.showMessageBox(mainWindow, {
+    type:      'info',
+    title:     `${APP_NAME} — Ready to Install`,
+    message:   `${APP_NAME} ${versionText} is ready`,
+    detail:    `The update has been downloaded. Click "Restart & Install" to apply it now — the app will reopen automatically in about 30 seconds.\n\nOr click "Later" to install the next time you close the app.`,
+    buttons:   ['Restart & Install', 'Later'],
+    defaultId: 0,
+    cancelId:  1,
+    icon:      path.join(__dirname, 'resources', 'icon.ico'),
+  });
+
+  if (result.response === 0) {
+    try {
+      const { autoUpdater } = require('electron-updater');
+      autoUpdater.quitAndInstall(false, true);
+    } catch (err) {
+      console.error('[Updater] Install failed:', err.message);
+    }
+  }
+}
+
 function broadcastUpdateState(extra = null) {
   const payload = {
-    state: updateState,
-    version: APP_VERSION,
-    updateVersion: updateInfo?.version ?? null,
-    releaseNotes: updateInfo?.releaseNotes ?? null,
-    ...( extra ? { progress: extra } : {}),
+    state:         updateState,
+    version:       APP_VERSION,
+    updateVersion: updateInfo?.version   ?? null,
+    releaseNotes:  updateInfo?.releaseNotes ?? null,
+    progress:      updateProgress ?? extra ?? null,
   };
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('updater:state', payload);
@@ -671,24 +742,31 @@ ipcMain.handle('pg:retry', async () => {
 
 // Updater IPC
 ipcMain.handle('updater:getState', () => ({
-  state: updateState,
-  version: APP_VERSION,
+  state:         updateState,
+  version:       APP_VERSION,
   updateVersion: updateInfo?.version ?? null,
+  releaseNotes:  updateInfo?.releaseNotes ?? null,
+  progress:      updateProgress ?? null,
 }));
 
 ipcMain.handle('updater:checkNow', async () => {
   await checkForUpdates();
-  return { state: updateState, version: APP_VERSION, updateVersion: updateInfo?.version ?? null };
+  return {
+    state:         updateState,
+    version:       APP_VERSION,
+    updateVersion: updateInfo?.version ?? null,
+    progress:      updateProgress ?? null,
+  };
 });
 
 ipcMain.handle('updater:download', async () => {
   try {
     const { autoUpdater } = require('electron-updater');
     await autoUpdater.downloadUpdate();
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }
-  return { ok: true };
 });
 
 ipcMain.handle('updater:install', () => {
