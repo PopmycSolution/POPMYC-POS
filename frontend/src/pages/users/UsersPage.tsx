@@ -102,6 +102,13 @@ export default function UsersPage() {
   const canManagePasswords = currentUserRole === 'SUPER_ADMIN' || currentUserRole === 'ADMIN';
   const isSuperAdmin = currentUserRole === 'SUPER_ADMIN';
 
+  // Role options available when adding a new user — Admin cannot create Admin/SuperAdmin
+  const availableRoleOptions = useMemo(() => {
+    if (isSuperAdmin) return roleOptions; // Super Admin can create any role
+    // Admin can only create Manager, Cashier, Inventory Clerk
+    return roleOptions.filter((r) => !['SUPER_ADMIN', 'ADMIN'].includes(r.value));
+  }, [isSuperAdmin]);
+
   const stats = useMemo(() => {
     const total    = users.length;
     const active   = users.filter((u) => u.isActive).length;
@@ -182,19 +189,32 @@ export default function UsersPage() {
     const isLocal = token.startsWith('local-session-');
 
     if (!isLocal) {
-      adminResetPassword(pwdTarget.id, { new_password: newPwd })
-        .then(() => {
+      // The local store ID may not match the backend UUID.
+      // Look up the real user by username first, then reset.
+      import('axios').then(({ default: axios }) => { void axios; }); // preload
+      import('@/services/api').then(({ default: api }) => {
+        // Find the backend user record by username
+        api.get<{ results?: { id: string; username: string }[]; id?: string; username?: string }[]>(
+          `/accounts/users/?search=${encodeURIComponent(pwdTarget.username)}`
+        ).then((res) => {
+          const list = Array.isArray(res.data)
+            ? (res.data as { id: string; username: string }[])
+            : ((res.data as { results?: { id: string; username: string }[] }).results ?? []);
+          const match = list.find((u) => u.username === pwdTarget.username);
+          const backendId = match?.id ?? pwdTarget.id;
+          return adminResetPassword(backendId, { new_password: newPwd });
+        }).then(() => {
           setPassword(pwdTarget.id, newPwd);
           setPwdSuccess(true);
           setTimeout(() => { setPwdTarget(null); setPwdSuccess(false); }, 1800);
-        })
-        .catch((err: unknown) => {
+        }).catch((err: unknown) => {
           const msg =
             (err as { response?: { data?: { detail?: string | string[] } } })
               ?.response?.data?.detail;
           if (Array.isArray(msg)) setPwdError(msg.join(' '));
           else setPwdError(msg ?? 'Password reset failed.');
         });
+      });
     } else {
       // Offline / local-only mode — update local store
       setPassword(pwdTarget.id, newPwd);
@@ -652,7 +672,7 @@ export default function UsersPage() {
                 <div>
                   <label className="text-xs font-semibold text-muted-600 mb-1 block">Role</label>
                   <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })} className={inputClass}>
-                    {roleOptions.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                    {availableRoleOptions.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
                 </div>
                 <div>

@@ -1,22 +1,48 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.forms import AdminPasswordChangeForm
+from django.utils.html import format_html
 from accounts.models import CustomUser, Role, Permission, UserRole, RolePermission
 
 
 @admin.register(CustomUser)
 class CustomUserAdmin(BaseUserAdmin):
-    list_display = ("username", "email", "phone_number", "business", "branch", "is_active", "is_staff", "created_at")
-    list_filter = ("business", "branch", "is_active", "is_staff", "is_superuser", "created_at")
+    list_display = (
+        "username", "email", "phone_number", "role_display",
+        "business", "branch", "is_active", "is_staff",
+        "must_change_password", "created_at",
+    )
+    list_filter = ("business", "branch", "is_active", "is_staff", "is_superuser", "must_change_password", "created_at")
     search_fields = ("username", "email", "phone_number", "first_name", "last_name")
     readonly_fields = ("id", "created_at", "updated_at", "last_login", "date_joined")
     fieldsets = BaseUserAdmin.fieldsets + (
-        (None, {"fields": ("id", "phone_number", "business", "branch")}),
+        ("POPMYC POS", {"fields": ("id", "phone_number", "business", "branch", "must_change_password", "profile_picture")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
-        (None, {"fields": ("phone_number", "business", "branch")}),
+        ("POPMYC POS", {"fields": ("phone_number", "business", "branch")}),
     )
     raw_id_fields = ("business", "branch")
+    actions = ["force_password_change"]
+
+    @admin.display(description="Role")
+    def role_display(self, obj):
+        try:
+            if obj.is_superuser:
+                return format_html('<span style="color:#dc2626;font-weight:600">Super Admin</span>')
+            ur = obj.user_roles.select_related("role").first()
+            if ur and ur.role:
+                return ur.role.name
+            if obj.is_staff:
+                return format_html('<span style="color:#7c3aed;font-weight:600">Admin</span>')
+        except Exception:
+            pass
+        return "Cashier"
+
+    @admin.action(description="🔑 Force password change on next login")
+    def force_password_change(self, request, queryset):
+        updated = queryset.update(must_change_password=True)
+        self.message_user(request, f"✅ {updated} user(s) will be required to change their password on next login.")
 
 
 @admin.register(Role)

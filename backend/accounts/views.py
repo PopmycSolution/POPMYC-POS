@@ -578,6 +578,30 @@ class UserViewSet(viewsets.ModelViewSet):
             return qs.filter(business=user.business)
         return qs.none()
 
+    def perform_create(self, serializer):
+        """
+        Role-based restriction on user creation:
+        - Super Admin: can create any role.
+        - Admin (is_staff): can create Manager / Cashier / Inventory Clerk only.
+        - Anyone else: forbidden.
+        """
+        from rest_framework.exceptions import PermissionDenied
+        requester = self.request.user
+        if not (requester.is_superuser or requester.is_staff):
+            raise PermissionDenied("Only Admin or Super Admin may create users.")
+
+        new_is_superuser = bool(self.request.data.get("is_superuser", False))
+        new_is_staff     = bool(self.request.data.get("is_staff", False))
+
+        if not requester.is_superuser:
+            if new_is_superuser:
+                raise PermissionDenied("Only Super Admin may create Super Admin accounts.")
+            if new_is_staff:
+                raise PermissionDenied("Only Super Admin may create Admin accounts.")
+            serializer.save(business=requester.business)
+        else:
+            serializer.save()
+
     @action(detail=True, methods=["post"], url_path="reset-password",
             permission_classes=[permissions.IsAuthenticated])
     def reset_password(self, request, pk=None):

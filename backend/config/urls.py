@@ -31,6 +31,11 @@ if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 else:
+    # Desktop / Production: WhiteNoise handles static files.
+    # Media files (user uploads — avatars, logos) are always served by Django
+    # directly since WhiteNoise only handles static, not user-uploaded media.
+    if settings.MEDIA_URL and settings.MEDIA_ROOT:
+        urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     # Desktop / Production: WhiteNoise handles all static files including the
     # built React SPA. The catch-all below sends every unmatched URL to
     # index.html so React Router handles client-side navigation.

@@ -54,29 +54,39 @@ class BusinessUserInline(admin.TabularInline):
     Users registered for this business.
     NOTE: Only users whose accounts were synced to the cloud appear here.
     All POS staff accounts live on the customer's local PC.
+    Click the username link → full user detail page → change password there.
     """
     model   = User
     fields  = (
-        "username", "first_name", "last_name", "email",
-        "is_active", "is_staff", "is_superuser",
+        "username_link", "first_name", "last_name", "email",
+        "is_active", "is_staff", "must_change_password",
     )
     readonly_fields = (
-        "username", "first_name", "last_name", "email",
-        "is_active", "is_staff", "is_superuser",
+        "username_link", "first_name", "last_name", "email",
+        "is_active", "is_staff", "must_change_password",
     )
     extra   = 0
     can_delete = False
-    show_change_link = True
+    show_change_link = False   # we handle the link ourselves in username_link
     max_num = 50
     verbose_name        = "User"
-    verbose_name_plural = "Users (cloud-synced)"
+    verbose_name_plural = "Users (cloud-synced) — click username to change password"
 
     def get_queryset(self, request):
         return super().get_queryset(request).only(
             "id", "username", "first_name", "last_name",
             "email", "is_active", "is_staff", "is_superuser",
-            "business",
+            "must_change_password", "business",
         )
+
+    @admin.display(description="Username (click to manage)")
+    def username_link(self, obj):
+        try:
+            from django.urls import reverse
+            url = reverse("admin:accounts_customuser_change", args=[obj.pk])
+            return format_html('<a href="{}" style="font-weight:600;color:#0369a1">{}</a>', url, obj.username)
+        except Exception:
+            return obj.username
 
     def has_add_permission(self, request, obj=None):
         return False

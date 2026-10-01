@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSyncStore }       from '@/stores/sync.store';
 import { useAuthStore }       from '@/stores/auth.store';
 import { useSalesStore }      from '@/stores/sales.store';
+import { useSettingsStore }   from '@/stores/settings.store';
 import * as syncService       from '@/services/sync.service';
 
 const BATCH_SIZE        = 25;    // records per upload batch
@@ -61,6 +62,7 @@ export function useSync(): UseSyncReturn {
   const requeueFailed = useSyncStore((s) => s.requeueFailed);
 
   const updateSaleSync = useSalesStore((s) => s.updateSaleSync);
+  const syncSettingsFromBackend = useSettingsStore((s) => s.syncFromBackend);
   const { accessToken } = useAuthStore();
 
   const pendingCount  = useSyncStore((s) => s.pendingCount());
@@ -226,8 +228,12 @@ export function useSync(): UseSyncReturn {
           since:     lastSyncAt ?? undefined,
         });
         downloaded = dlResult.count;
-        // Note: applying downloaded changes to local stores is a
-        // future enhancement. For now we track the count for the log.
+        // If the server returned any records (business/settings/license changes
+        // made by the POPMYC admin), re-fetch business settings from the backend
+        // so the local store reflects the latest values immediately.
+        if (downloaded > 0) {
+          void syncSettingsFromBackend();
+        }
       } catch { /* download failing is non-fatal — will retry next cycle */ }
 
       // ── 4. Update cursor ──────────────────────────────────────────────────
@@ -255,7 +261,7 @@ export function useSync(): UseSyncReturn {
       setIsSyncing(false);
       syncRunningRef.current = false;
     }
-  }, [queue, deviceId, lastSyncAt, accessToken, markSyncing, markSynced, markFailed, markConflict, setIsSyncing, setLastSyncAt, pruneQueue, appendLog, updateSaleSync]);
+  }, [queue, deviceId, lastSyncAt, accessToken, markSyncing, markSynced, markFailed, markConflict, setIsSyncing, setLastSyncAt, pruneQueue, appendLog, updateSaleSync, syncSettingsFromBackend]);
 
   // ── Auto-sync when coming back online ─────────────────────────────────────
   useEffect(() => {
@@ -266,16 +272,17 @@ export function useSync(): UseSyncReturn {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);
 
-  // ── Periodic sync every 60s when online and idle ──────────────────────────
+  // ── Periodic sync every 30s when online — always, not just when pending ──
+  // This ensures business_category / inventory_mode / license changes made
+  // by the POPMYC admin in the cloud Django panel are downloaded promptly.
   useEffect(() => {
     const iv = setInterval(() => {
       if (!isOnline || syncRunningRef.current) return;
-      if (pendingCount === 0 && failedCount === 0) return;
       void syncNow();
-    }, 60_000);
+    }, 30_000);
     return () => clearInterval(iv);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, pendingCount, failedCount]);
+  }, [isOnline]);
 
   return {
     isOnline,

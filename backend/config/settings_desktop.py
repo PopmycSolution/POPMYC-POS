@@ -82,6 +82,7 @@ _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 MEDIA_ROOT = _DATA_DIR / "media"
 MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+MEDIA_URL = "/media/"   # served by Django at http://127.0.0.1:8000/media/ in desktop mode
 
 LOGS_DIR = _DATA_DIR / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)

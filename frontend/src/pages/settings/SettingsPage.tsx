@@ -330,7 +330,6 @@ export default function SettingsPage() {
   const updateTax           = useSettingsStore((s) => s.updateTax);
   const updateReceipt       = useSettingsStore((s) => s.updateReceipt);
   const updatePricing       = useSettingsStore((s) => s.updatePricing);
-  const updateInventory     = useSettingsStore((s) => s.updateInventory);
   const togglePaymentMethod = useSettingsStore((s) => s.togglePaymentMethod);
   const updateEmail         = useSettingsStore((s) => s.updateEmailNotifications);
 
@@ -835,23 +834,30 @@ export default function SettingsPage() {
           {/* ── Inventory / Operating Mode ── */}
           {activeSection === 'inventory' && (
             <div className="space-y-4">
-              {/* Operating mode selector */}
+              {/* Operating mode — READ ONLY; only POPMYC admin can change via Django */}
               <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.06)] border border-muted-100 overflow-hidden">
                 <div className="px-5 py-4 border-b border-muted-100 flex items-center gap-2">
                   <Package className="h-5 w-5 text-muted-400" />
                   <h2 className="text-sm font-bold text-[#1E293B]">Operating Mode</h2>
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                    <Lock className="h-3 w-3" /> Locked
+                  </span>
                 </div>
                 <div className="p-5 space-y-4">
-                  <p className="text-xs text-muted-500 leading-relaxed">
-                    Choose how this business operates. You can switch modes at any time — existing data is <strong>never deleted</strong>.
-                  </p>
+                  {/* Locked notice */}
+                  <div className="flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
+                    <Lock className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700 leading-relaxed">
+                      <strong>Operating Mode is set during business setup and cannot be changed here.</strong>{' '}
+                      To change it, contact your POPMYC administrator — they can update it from the cloud admin panel.
+                    </p>
+                  </div>
 
-                  {/* Three-way selector */}
+                  {/* Current mode display — read-only */}
                   {(() => {
                     const mode = inventory.inventoryMode;
                     const isFull  = mode === 'FULL_POS'       || mode === 'STOCK_ENABLED';
                     const isInv   = mode === 'INVENTORY_ONLY';
-                    const isPos   = mode === 'POS_ONLY'        || mode === 'SALES_ONLY';
 
                     const opts = [
                       {
@@ -886,7 +892,7 @@ export default function SettingsPage() {
                         value:   'POS_ONLY' as const,
                         label:   'POS Only',
                         icon:    ShoppingBag,
-                        active:  isPos,
+                        active:  !isFull && !isInv,
                         color:   'amber',
                         bullets: [
                           '✔ Full POS checkout',
@@ -899,27 +905,9 @@ export default function SettingsPage() {
                     ] as const;
 
                     const colorMap = {
-                      emerald: {
-                        border: 'border-emerald-500 bg-emerald-50',
-                        icon:   'bg-emerald-100',
-                        iconFg: 'text-emerald-600',
-                        title:  'text-emerald-800',
-                        badge:  'text-[10px] font-bold text-emerald-600',
-                      },
-                      blue: {
-                        border: 'border-blue-500 bg-blue-50',
-                        icon:   'bg-blue-100',
-                        iconFg: 'text-blue-600',
-                        title:  'text-blue-800',
-                        badge:  'text-[10px] font-bold text-blue-600',
-                      },
-                      amber: {
-                        border: 'border-amber-500 bg-amber-50',
-                        icon:   'bg-amber-100',
-                        iconFg: 'text-amber-600',
-                        title:  'text-amber-800',
-                        badge:  'text-[10px] font-bold text-amber-600',
-                      },
+                      emerald: { border: 'border-emerald-500 bg-emerald-50', icon: 'bg-emerald-100', iconFg: 'text-emerald-600', title: 'text-emerald-800', badge: 'text-[10px] font-bold text-emerald-600' },
+                      blue:    { border: 'border-blue-500 bg-blue-50',       icon: 'bg-blue-100',    iconFg: 'text-blue-600',    title: 'text-blue-800',    badge: 'text-[10px] font-bold text-blue-600'    },
+                      amber:   { border: 'border-amber-500 bg-amber-50',     icon: 'bg-amber-100',   iconFg: 'text-amber-600',   title: 'text-amber-800',   badge: 'text-[10px] font-bold text-amber-600'   },
                     };
 
                     return (
@@ -927,15 +915,12 @@ export default function SettingsPage() {
                         {opts.map(({ value, label, icon: Icon, active, color, bullets }) => {
                           const c = colorMap[color];
                           return (
-                            <button
+                            /* div not button — not clickable */
+                            <div
                               key={value}
-                              type="button"
-                              onClick={() => updateInventory({ inventoryMode: value })}
                               className={clsx(
-                                'flex flex-col items-start gap-2 rounded-2xl border-2 p-4 text-left transition-all',
-                                active
-                                  ? c.border
-                                  : 'border-muted-200 bg-white hover:border-muted-300',
+                                'flex flex-col items-start gap-2 rounded-2xl border-2 p-4',
+                                active ? c.border : 'border-muted-200 bg-white opacity-50',
                               )}
                             >
                               <div className="flex items-center gap-2 w-full">
@@ -950,38 +935,12 @@ export default function SettingsPage() {
                               <ul className="text-[11px] text-muted-500 space-y-0.5 leading-relaxed">
                                 {bullets.map((b) => <li key={b}>{b}</li>)}
                               </ul>
-                            </button>
+                            </div>
                           );
                         })}
                       </div>
                     );
                   })()}
-
-                  {/* Status banner */}
-                  {(() => {
-                    const mode = inventory.inventoryMode;
-                    const isFull = mode === 'FULL_POS' || mode === 'STOCK_ENABLED';
-                    const isInv  = mode === 'INVENTORY_ONLY';
-                    const cfg = isFull
-                      ? { bg: 'bg-emerald-50 border-emerald-200', ic: 'text-emerald-600', tc: 'text-emerald-800', ts: 'text-emerald-700',
-                          title: 'Full POS + Inventory is active', body: 'All POS and inventory features are available.' }
-                      : isInv
-                      ? { bg: 'bg-blue-50 border-blue-200',       ic: 'text-blue-600',    tc: 'text-blue-800',    ts: 'text-blue-700',
-                          title: 'Inventory Only mode is active', body: 'Stock management is enabled. New POS sales are blocked.' }
-                      : { bg: 'bg-amber-50 border-amber-200',     ic: 'text-amber-600',   tc: 'text-amber-800',   ts: 'text-amber-700',
-                          title: 'POS Only mode is active', body: 'Checkout and sales are enabled. Inventory management is hidden.' };
-                    return (
-                      <div className={clsx('flex items-start gap-3 p-4 rounded-xl border', cfg.bg)}>
-                        <Info className={clsx('h-4 w-4 shrink-0 mt-0.5', cfg.ic)} />
-                        <div>
-                          <p className={clsx('text-sm font-semibold', cfg.tc)}>{cfg.title}</p>
-                          <p className={clsx('text-xs mt-0.5 leading-relaxed', cfg.ts)}>{cfg.body}</p>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <div className="flex justify-end pt-2"><SaveButton onClick={showSaved} /></div>
                 </div>
               </div>
 

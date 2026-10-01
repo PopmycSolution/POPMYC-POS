@@ -1009,15 +1009,18 @@ export function ProductsPage() {
                       <Input label="Barcode (optional)" placeholder="e.g. 6001002"
                         error={errors.barcode?.message} {...register('barcode')} />
                     </div>
-                    <div className="sm:col-span-2">
-                      <Input
-                        label="Model Number (optional)"
-                        placeholder="e.g. iPhone 15 Pro 256GB, Samsung A55 5G"
-                        error={errors.modelNumber?.message}
-                        {...register('modelNumber')}
-                      />
-                      <p className="mt-1 text-[11px] text-muted-400">For phones, electronics and similar — helps identify exact variants.</p>
-                    </div>
+                    {/* Model Number — hidden for grocery/supermarket/general retail (no model variants) */}
+                    {!['PROVISION_GROCERY', 'SUPERMARKET', 'GENERAL_RETAIL'].includes(businessCategory) && (
+                      <div className="sm:col-span-2">
+                        <Input
+                          label="Model Number (optional)"
+                          placeholder="e.g. iPhone 15 Pro 256GB, Samsung A55 5G"
+                          error={errors.modelNumber?.message}
+                          {...register('modelNumber')}
+                        />
+                        <p className="mt-1 text-[11px] text-muted-400">For phones, electronics and similar — helps identify exact variants.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
