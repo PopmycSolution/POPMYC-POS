@@ -154,6 +154,22 @@ def on_branch_saved(sender, instance, created, **kwargs):
     _queue_sync_record(instance, "create" if created else "update")
 
 
+def on_user_saved(sender, instance, created, **kwargs):
+    """
+    Queue a SyncRecord when an Admin or SuperAdmin user is saved.
+    Only syncs users that belong to a business (POS staff).
+    Password is always excluded by _EXCLUDED_FIELDS.
+    Cashiers/Managers are NOT synced — only is_staff and is_superuser users
+    so the cloud admin shows the business owner and their admin team.
+    """
+    # Only sync users that belong to a business and are Admin/SuperAdmin
+    if not instance.business_id:
+        return
+    if not (instance.is_staff or instance.is_superuser):
+        return
+    _queue_sync_record(instance, "create" if created else "update")
+
+
 def connect_signals() -> None:
     """
     Connect all cloud-push signals.
@@ -184,3 +200,11 @@ def connect_signals() -> None:
         logger.debug("[CloudSignal] Connected Branch signals")
     except Exception as exc:
         logger.warning("[CloudSignal] Could not connect branch signals: %s", exc)
+
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        post_save.connect(on_user_saved, sender=User, weak=False)
+        logger.debug("[CloudSignal] Connected CustomUser signals (Admin/SuperAdmin only)")
+    except Exception as exc:
+        logger.warning("[CloudSignal] Could not connect user signals: %s", exc)

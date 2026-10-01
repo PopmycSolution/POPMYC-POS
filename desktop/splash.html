@@ -87,7 +87,7 @@
   </div>
   <div class="spinner"></div>
   <p class="status" id="status">Starting local services…</p>
-  <p class="version">v1.0.0</p>
+  <p class="version" id="version">v…</p>
 
   <script>
     // Cycle through status messages to reassure the user startup is progressing
@@ -103,6 +103,14 @@
       i = (i + 1) % messages.length;
       el.textContent = messages[i];
     }, 2500);
+
+    // Read app version from URL query param injected by main.js (?v=1.0.5)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get('v');
+      const vEl = document.getElementById('version');
+      if (vEl && v) vEl.textContent = 'v' + v;
+    } catch (e) { /* silently ignore */ }
   </script>
 </body>
 </html>

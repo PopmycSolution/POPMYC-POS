@@ -425,16 +425,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
 
         if (biz) {
           const update: Partial<BusinessConfig> = {};
-          if (biz.name)              update.name             = biz.name;
-          if (biz.business_category) update.businessCategory = biz.business_category as BusinessCategory;
-          if (biz.address != null)   update.address          = biz.address;
-          if (biz.phone != null)     update.phone            = biz.phone;
-          if (biz.email != null)     update.email            = biz.email;
-          if (biz.currency)          update.currency         = biz.currency;
-          if (biz.currency_symbol)   update.currencySymbol   = biz.currency_symbol;
-          if (biz.tin != null)       update.tin              = biz.tin;
-          // logo is a URL string when the backend has it; empty string clears the logo
-          if (biz.logo != null)      update.logoUrl          = biz.logo ?? '';
+          // Always apply every field from the backend — even empty strings.
+          // If the backend says phone is "" we want to show "" not a stale default.
+          update.name             = biz.name             ?? '';
+          update.businessCategory = (biz.business_category as BusinessCategory) ?? 'GENERAL_RETAIL';
+          update.address          = biz.address          ?? '';
+          update.phone            = biz.phone            ?? '';
+          update.email            = biz.email            ?? '';
+          update.currency         = biz.currency         ?? 'GHS';
+          update.currencySymbol   = biz.currency_symbol  ?? 'GH₵';
+          update.tin              = biz.tin              ?? '';
+          // logo: null/undefined from backend means no logo set — use empty string
+          update.logoUrl          = biz.logo             ?? '';
 
           set((state) => {
             const next = { ...state, business: { ...state.business, ...update } };
@@ -444,6 +446,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
         }
 
         // Also fetch business settings (inventory mode, pricing config)
+        // The enhanced my-settings endpoint also returns bonus business fields
+        // as a fallback for when /businesses/ returns no results.
         const settingsRes = await api.get<{
           inventory_mode?: string;
           allow_cashier_price_negotiation?: boolean;
@@ -454,10 +458,38 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
             rate?: number;
             inclusive?: boolean;
           };
+          // Bonus business fields from the enhanced endpoint:
+          business_name?: string;
+          business_category?: string;
+          business_phone?: string;
+          business_email?: string;
+          business_address?: string;
+          business_currency?: string;
+          business_currency_symbol?: string;
+          business_tin?: string;
         }>('/businesses/settings/my-settings/');
 
         const sData = settingsRes.data;
         if (sData) {
+          // If /businesses/ returned nothing, use the bonus fields from my-settings
+          if (!biz && sData.business_name) {
+            const overlay: Partial<BusinessConfig> = {
+              name:             sData.business_name             ?? '',
+              businessCategory: (sData.business_category as BusinessCategory) ?? 'GENERAL_RETAIL',
+              address:          sData.business_address          ?? '',
+              phone:            sData.business_phone            ?? '',
+              email:            sData.business_email            ?? '',
+              currency:         sData.business_currency         ?? 'GHS',
+              currencySymbol:   sData.business_currency_symbol  ?? 'GH₵',
+              tin:              sData.business_tin              ?? '',
+            };
+            set((state) => {
+              const next = { ...state, business: { ...state.business, ...overlay } };
+              persist(next);
+              return { business: next.business };
+            });
+          }
+
           if (sData.inventory_mode) {
             set((state) => {
               const next = { ...state, inventory: { ...state.inventory, inventoryMode: sData.inventory_mode as InventoryMode } };

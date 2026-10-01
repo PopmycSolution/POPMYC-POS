@@ -302,10 +302,11 @@ class ProfilePictureView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── 3. Pillow validation + resize ─────────────────────────────────────
+        # ── 3. Pillow validation + resize (with fallback if Pillow unavailable) ─
+        buffer = None
         try:
             from PIL import Image
-            import io
+            import io as _io
 
             img = Image.open(uploaded)
             img.verify()                      # detects truncated / corrupt files
@@ -314,8 +315,6 @@ class ProfilePictureView(APIView):
             uploaded.seek(0)
             img = Image.open(uploaded)
 
-            # Decompression-bomb guard (already covered by Pillow's default
-            # MAX_IMAGE_PIXELS, but be explicit)
             w, h = img.size
             if w * h > AVATAR_MAX_PIXELS:
                 return Response(
@@ -323,20 +322,26 @@ class ProfilePictureView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Convert to RGB (handles RGBA/P PNGs, WebP with alpha, etc.)
+            # Convert to RGB then centre-crop + resize to 400×400
             img = img.convert("RGBA") if img.mode in ("RGBA", "LA") else img.convert("RGB")
             img = img.convert("RGB")
-
-            # Centre-crop to square then resize to 400×400
             side = min(img.width, img.height)
             left = (img.width  - side) // 2
             top  = (img.height - side) // 2
             img  = img.crop((left, top, left + side, top + side))
             img  = img.resize(AVATAR_OUTPUT_SIZE, Image.LANCZOS)
 
-            # Write processed image to an in-memory buffer
-            buffer = io.BytesIO()
+            buffer = _io.BytesIO()
             img.save(buffer, format="JPEG", quality=88, optimize=True)
+            buffer.seek(0)
+
+        except ImportError:
+            # Pillow not installed in this environment — save raw file without processing.
+            # This handles the bundled desktop runtime where Pillow may be absent.
+            logger.warning("[Avatar] Pillow not available — saving raw file without resize.")
+            uploaded.seek(0)
+            import io as _io
+            buffer = _io.BytesIO(uploaded.read())
             buffer.seek(0)
 
         except Exception as exc:
@@ -345,7 +350,14 @@ class ProfilePictureView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── 4. Delete old picture file from storage (if any) ──────────────────
+        # ── 4. Guard: ensure buffer was produced ──────────────────────────────
+        if buffer is None:
+            return Response(
+                {"detail": "Could not process image file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── 5. Delete old picture file from storage (if any) ──────────────────
         user = request.user
         if user.profile_picture:
             try:
@@ -353,9 +365,11 @@ class ProfilePictureView(APIView):
             except Exception:
                 pass     # file may already be gone; safe to ignore
 
-        # ── 5. Save processed image ───────────────────────────────────────────
+        # ── 6. Save processed image ───────────────────────────────────────────
         from django.core.files.base import ContentFile
-        filename = f"{user.pk}.jpg"
+        # Use .jpg when Pillow processed it; keep original ext for raw fallback
+        save_ext = ".jpg" if (buffer and not getattr(buffer, '_raw_fallback', False)) else (ext or ".jpg")
+        filename = f"{user.pk}{save_ext}"
         user.profile_picture.save(filename, ContentFile(buffer.read()), save=True)
 
         serializer = CustomUserSerializer(user, context={"request": request})

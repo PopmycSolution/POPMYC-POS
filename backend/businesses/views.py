@@ -144,9 +144,9 @@ class BusinessSettingsViewSet(BusinessScopedMixin, viewsets.ModelViewSet):
     def my_settings(self, request):
         """
         GET /api/v1/businesses/settings/my-settings/
-        Returns the current user's business settings (public subset).
-        Useful for the frontend to determine inventory_mode / stock_enabled
-        without having to know the settings PK.
+        Returns the current user's business settings (public subset) PLUS
+        the parent Business fields so the frontend can populate System Settings
+        in a single request.
         """
         user = request.user
         if not user.business_id:
@@ -155,7 +155,26 @@ class BusinessSettingsViewSet(BusinessScopedMixin, viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
         settings_obj, _ = BusinessSettings.objects.get_or_create(business_id=user.business_id)
-        return Response(BusinessSettingsPublicSerializer(settings_obj).data)
+        data = BusinessSettingsPublicSerializer(settings_obj).data
+
+        # Also include tax_config JSON blob so the frontend can sync tax settings
+        data["tax_config"] = settings_obj.tax_config or {}
+
+        # Include business identity fields so the frontend gets everything in one call
+        try:
+            biz = settings_obj.business
+            data["business_name"]     = biz.name
+            data["business_category"] = biz.business_category
+            data["business_phone"]    = biz.phone
+            data["business_email"]    = biz.email
+            data["business_address"]  = biz.address
+            data["business_currency"] = biz.currency
+            data["business_currency_symbol"] = biz.currency_symbol
+            data["business_tin"]      = biz.tin or ""
+        except Exception:
+            pass
+
+        return Response(data)
 
 
 class BusinessModeView(APIView):

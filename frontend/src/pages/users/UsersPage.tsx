@@ -131,13 +131,15 @@ export default function UsersPage() {
   }, [users, searchTerm, roleFilter]);
 
   // ── Add User ──────────────────────────────────────────────────────────────
-  function handleAdd() {
+  async function handleAdd() {
     if (!formData.firstName || !formData.username) return;
     setAddPwdError('');
     if (formData.password && formData.password !== formData.confirmPassword) {
       setAddPwdError('Passwords do not match.');
       return;
     }
+
+    // Add to local store immediately for offline-first UX
     addUser({
       firstName: formData.firstName, lastName: formData.lastName,
       username:  formData.username,  email:     formData.email,
@@ -147,6 +149,38 @@ export default function UsersPage() {
       isActive:  true,
       password:  formData.password || undefined,
     });
+
+    // Also create on the backend so the user exists in the database
+    // and gets synced to the cloud admin (for Admin/SuperAdmin roles).
+    const token = useAuthStore.getState().accessToken ?? '';
+    if (token && !token.startsWith('local-session-')) {
+      try {
+        const { default: api } = await import('@/services/api');
+        // Map role to is_staff / is_superuser flags
+        const isStaff      = formData.role === 'ADMIN';
+        const isSuperuser  = formData.role === 'SUPER_ADMIN';
+        // Look up the branch id from the branch store
+        const branchRecord = branches.find(
+          (b) => b.name === (formData.branch || defaultBranch)
+        );
+        await api.post('/accounts/users/', {
+          username:    formData.username,
+          first_name:  formData.firstName,
+          last_name:   formData.lastName,
+          email:       formData.email       || '',
+          phone_number: formData.phone      || '',
+          is_staff:    isStaff,
+          is_superuser: isSuperuser,
+          is_active:   true,
+          branch:      branchRecord?.id ?? null,
+          ...(formData.password ? { password: formData.password } : {}),
+        });
+      } catch {
+        // Backend creation failed (offline / permission) — local store still has the user.
+        // No error shown to avoid blocking the UI for non-critical sync failures.
+      }
+    }
+
     setFormData({
       firstName: '', lastName: '', username: '', email: '', phone: '',
       role: 'CASHIER', branch: '', status: 'ACTIVE', isActive: true,
@@ -756,7 +790,7 @@ export default function UsersPage() {
                   Cancel
                 </button>
                 <button
-                  onClick={handleAdd}
+                  onClick={() => void handleAdd()}
                   disabled={!formData.firstName || !formData.username ||
                     (!!formData.password && formData.password !== formData.confirmPassword)}
                   className="rounded-xl bg-[#1E293B] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#334155] disabled:opacity-40">

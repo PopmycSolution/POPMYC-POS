@@ -483,7 +483,10 @@ function createSplashWindow() {
     backgroundColor: '#0a5c4a',
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
-  splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+  // Pass the real app version as a query param so splash.html can display it
+  splashWindow.loadFile(path.join(__dirname, 'splash.html'), {
+    query: { v: APP_VERSION },
+  });
   splashWindow.on('closed', () => { splashWindow = null; });
 }
 

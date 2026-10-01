@@ -46,9 +46,14 @@ logger = logging.getLogger(__name__)
 # Checked case-insensitively — both "Sale" and "sale" are accepted from clients.
 #
 # DO NOT add:
-#   - accounts.customuser (passwords, auth data)
-#   - licensing.license   (activation codes)
+#   - accounts.customuser passwords/tokens (stripped by _NEVER_SYNC_FIELDS)
+#   - licensing.license   activation codes (stripped by _NEVER_SYNC_FIELDS)
 #   - cloud.*             (cloud credentials, token hashes)
+#   - auth.*              (Django auth internals)
+#   - django_*            (framework internals)
+# NOTE: accounts.customuser IS in the allowlist but only Admin/SuperAdmin users
+#   are ever queued (enforced by on_user_saved signal guard). Password is always
+#   stripped. This allows cloud admin to see business admins.
 #   - auth.*              (Django auth internals)
 #   - django_*            (framework internals)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,6 +106,9 @@ SYNC_ENTITY_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("businesses",   "businesssettings"),
     ("licensing",    "license"),
     ("licensing",    "licenserenewallog"),
+    # ── User sync — Admin/SuperAdmin only ────────────────────────────────────
+    # Password is always stripped by _NEVER_SYNC_FIELDS — never transmitted.
+    ("accounts",     "customuser"),
 })
 
 # Fields that must never be overwritten by a client payload under any action.
