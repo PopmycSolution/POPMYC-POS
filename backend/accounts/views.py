@@ -367,16 +367,30 @@ class ProfilePictureView(APIView):
 
         # ── 6. Save processed image ───────────────────────────────────────────
         from django.core.files.base import ContentFile
-        # Use .jpg when Pillow processed it; keep original ext for raw fallback
-        save_ext = ".jpg" if (buffer and not getattr(buffer, '_raw_fallback', False)) else (ext or ".jpg")
-        filename = f"{user.pk}{save_ext}"
+        # Always save as .jpg for consistency
+        filename = f"{user.pk}.jpg"
         user.profile_picture.save(filename, ContentFile(buffer.read()), save=True)
 
-        serializer = CustomUserSerializer(user, context={"request": request})
+        # Build the absolute URL manually as a fallback for desktop mode
+        # where request.build_absolute_uri() may not produce the correct host.
+        pic_url = None
+        try:
+            if user.profile_picture and user.profile_picture.name:
+                from django.conf import settings as _s
+                media_url = getattr(_s, "MEDIA_URL", "/media/")
+                pic_url   = request.build_absolute_uri(media_url + user.profile_picture.name)
+        except Exception:
+            pass
+
+        # Fallback via serializer
+        if not pic_url:
+            serializer = CustomUserSerializer(user, context={"request": request})
+            pic_url = serializer.data.get("profile_picture_url")
+
         return Response(
             {
                 "detail": "Profile picture updated successfully.",
-                "profile_picture_url": serializer.data.get("profile_picture_url"),
+                "profile_picture_url": pic_url,
             },
             status=status.HTTP_200_OK,
         )

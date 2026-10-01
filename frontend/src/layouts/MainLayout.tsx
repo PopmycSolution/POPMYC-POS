@@ -7,7 +7,7 @@ import {
   AlertTriangle, ShieldOff, Home, TrendingUp, Clock, Shield,
   ClipboardList, Server, HardDrive, Bookmark, Ruler, Building2,
   Sun, Moon, ChevronRight, Zap, KeyRound, Camera, ArrowLeftRight,
-  CalendarClock, XCircle,
+  CalendarClock, XCircle, RefreshCw,
 } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { BranchSwitcher } from '@/components/branches/BranchSwitcher';
@@ -29,6 +29,7 @@ import { canAccess, getRoleConfig, type AppRoute } from '@/utils/permissions';
 import { formatCurrency, formatDate } from '@/utils/format';
 import ChangePasswordModal from '@/components/auth/ChangePasswordModal';
 import ProfilePictureModal from '@/components/auth/ProfilePictureModal';
+import { useUpdater } from '@/hooks/useUpdater';
 import api from '@/services/api';
 
 // ── License expiry banner ─────────────────────────────────────────────────────
@@ -639,6 +640,9 @@ export function MainLayout() {
   const inventoryEnabled = useSettingsStore((s) => s.inventoryEnabled);
   const isSingleBranch   = useSettingsStore((s) => s.isSingleBranch);
 
+  // Auto-updater state — drives the update button in the header
+  const updater = useUpdater();
+
   const navGroups = useMemo(() =>
     ALL_NAV_GROUPS
       .map((g) => ({
@@ -730,7 +734,18 @@ export function MainLayout() {
       {/* ── Profile picture modal ── */}
       <ProfilePictureModal
         open={avatarModalOpen}
-        onClose={() => setAvatarModalOpen(false)}
+        onClose={() => {
+          setAvatarModalOpen(false);
+          // Re-fetch avatar URL from backend after modal closes (may have changed)
+          const token = useAuthStore.getState().accessToken ?? '';
+          if (!token || token.startsWith('local-session-')) return;
+          api.get<Record<string, unknown>>('/accounts/me/', { _skipAuthRedirect: true } as Record<string, unknown>)
+            .then((res) => {
+              const url = (res.data.profile_picture_url as string | null) ?? null;
+              setAvatarUrl(url);
+            })
+            .catch(() => {});
+        }}
         currentAvatarUrl={avatarUrl}
         initials={initials}
       />
@@ -928,6 +943,43 @@ export function MainLayout() {
 
               {/* Branch switcher */}
               <BranchSwitcher />
+
+              {/* ── Update available button — appears when update is ready ── */}
+              {updater.isDesktop && updater.state === 'ready' && (
+                <button
+                  type="button"
+                  onClick={() => updater.install()}
+                  title={`Update to v${updater.updateVersion ?? '...'} — click to restart and install`}
+                  className="hidden sm:inline-flex items-center gap-1.5 rounded-xl px-3 h-8 text-xs font-bold transition-all animate-pulse"
+                  style={{ background: '#003D35', color: '#4ECCA3', border: '1px solid rgba(78,204,163,0.4)' }}
+                >
+                  <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                  Update v{updater.updateVersion}
+                </button>
+              )}
+              {/* Mobile: just icon */}
+              {updater.isDesktop && updater.state === 'ready' && (
+                <button
+                  type="button"
+                  onClick={() => updater.install()}
+                  title={`Update to v${updater.updateVersion ?? '...'}`}
+                  className="sm:hidden inline-flex items-center justify-center h-9 w-9 rounded-xl animate-pulse"
+                  style={{ background: '#003D35', color: '#4ECCA3', border: '1px solid rgba(78,204,163,0.4)' }}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </button>
+              )}
+              {/* Downloading: show a small spinner so user knows it's happening */}
+              {updater.isDesktop && updater.state === 'downloading' && (
+                <div
+                  className="hidden sm:inline-flex items-center gap-1.5 rounded-xl px-3 h-8 text-xs font-medium"
+                  style={{ background: 'var(--mint-alpha)', color: 'var(--mint)' }}
+                  title="Downloading update…"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  {Math.round(updater.progress?.percent ?? 0)}%
+                </div>
+              )}
 
               {/* Sync status indicator */}
               <SyncStatusIndicator />
