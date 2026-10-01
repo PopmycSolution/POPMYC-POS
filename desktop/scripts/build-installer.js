@@ -19,6 +19,26 @@ const ROOT    = path.join(__dirname, '..');          // desktop/
 const UNPACKED = path.join(ROOT, 'dist-installer', 'win-unpacked');
 const ISS      = path.join(ROOT, 'installer', 'popmyc-setup.iss');
 
+// ── Generate app-update.yml in win-unpacked/resources/ ───────────────────────
+// electron-updater requires this file in the installed app's resources/ folder
+// to know the GitHub repo details and updater cache name.
+// Without it, autoUpdater.checkForUpdates() throws "updaterCacheDirName is not
+// specified in app-update.yml" — causing "Update check failed" in the UI.
+// We generate it here from package.json so Inno Setup can bundle it.
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const pub = PKG.build?.publish || {};
+const appUpdateYmlContent = [
+  `provider: github`,
+  `owner: ${pub.owner || 'PopmycSolution'}`,
+  `repo: ${pub.repo || 'POPMYC-POS'}`,
+  `updaterCacheDirName: ${PKG.build?.appId?.replace(/\./g, '-') || 'com-popmyc-pos'}-updater`,
+  `releaseType: ${pub.releaseType || 'release'}`,
+  ``,
+].join('\n');
+
+const appUpdateYmlPath = path.join(UNPACKED, 'resources', 'app-update.yml');
+console.log('\n📝  Generating app-update.yml...');
+
 // ── Sync version from package.json into the ISS file ─────────────────────────
 // This ensures POPMYC-POS-Setup-{version}.exe always matches package.json.
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
@@ -30,6 +50,16 @@ const issUpdated  = issContent.replace(
 if (issContent !== issUpdated) {
   fs.writeFileSync(ISS, issUpdated, 'utf8');
   console.log(`ℹ️   ISS version patched to ${PKG_VERSION}`);
+}
+
+// ── Write app-update.yml to win-unpacked/resources/ ──────────────────────────
+// Do this AFTER version patch so the resources/ folder definitely exists.
+try {
+  fs.mkdirSync(path.join(UNPACKED, 'resources'), { recursive: true });
+  fs.writeFileSync(appUpdateYmlPath, appUpdateYmlContent, 'utf8');
+  console.log(`  ✅  app-update.yml written to resources/ (enables auto-update)`);
+} catch (e) {
+  console.warn(`  ⚠️   Could not write app-update.yml: ${e.message}`);
 }
 
 // Required files inside win-unpacked
