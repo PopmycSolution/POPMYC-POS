@@ -1,9 +1,12 @@
 /**
  * useUpdater.ts
  * =============
- * React hook that tracks the Electron auto-updater state.
- * Safe to call in web/browser mode — returns idle state when
- * window.popmycDesktop is not available.
+ * React hook that tracks Electron auto-updater state.
+ * Safe in web/browser mode — returns idle when window.popmycDesktop is absent.
+ *
+ * Flow (Kiro-style):
+ *   app starts → check (3s) → download automatically → state='ready'
+ *   → UpdateToast shows banner → user clicks Restart & Update → done
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -35,47 +38,49 @@ const DEFAULT: UpdaterInfo = {
 
 export function useUpdater() {
   const [info, setInfo] = useState<UpdaterInfo>(DEFAULT);
-  const listenerAttached = useRef(false);
+  const listenerRef    = useRef(false);
+  const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const desktop = typeof window !== 'undefined' ? window.popmycDesktop : undefined;
 
-  // Bootstrap: fetch current state on mount AND subscribe to future pushes.
-  // Fetching on mount handles the race where the update check fired before
-  // React mounted (e.g. fast machine, update check fires at 15s, React
-  // mounts at 8s but finishes routing at 14s).
   useEffect(() => {
     if (!desktop) return;
 
-    // 1. Pull current state immediately
+    // 1. Fetch current state immediately on mount
     void desktop.updaterGetState().then((s: Partial<UpdaterInfo>) => {
       setInfo(prev => ({ ...prev, ...s }));
     }).catch(() => {});
 
-    // 2. Also poll every 5s for the first 60s after mount — catches the
-    //    initial update check result even if the push event was missed.
-    let polls = 0;
-    const pollId = setInterval(() => {
-      polls++;
-      if (polls > 12) { clearInterval(pollId); return; } // stop after 60s
-      void desktop.updaterGetState().then((s: Partial<UpdaterInfo>) => {
-        setInfo(prev => {
-          // Only update if state actually changed — avoids re-renders
-          if (s.state && s.state !== prev.state) return { ...prev, ...s };
-          if (s.updateVersion && s.updateVersion !== prev.updateVersion) return { ...prev, ...s };
-          return prev;
-        });
-      }).catch(() => {});
-    }, 5_000);
-
-    // 3. Subscribe to pushed state changes from main process
-    if (!listenerAttached.current) {
-      listenerAttached.current = true;
+    // 2. Subscribe to pushed state changes from main process (one-time)
+    if (!listenerRef.current) {
+      listenerRef.current = true;
       desktop.onUpdaterState?.((data: Partial<UpdaterInfo>) => {
         setInfo(prev => ({ ...prev, ...data }));
       });
     }
 
-    return () => clearInterval(pollId);
+    // 3. Poll every 3s for the first 30s to catch state emitted before React
+    //    finished mounting (race condition on first launch).
+    //    After 30s stop — the push listener handles everything from there.
+    let polls = 0;
+    pollRef.current = setInterval(() => {
+      polls++;
+      if (polls >= 10) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        return;
+      }
+      void desktop.updaterGetState().then((s: Partial<UpdaterInfo>) => {
+        setInfo(prev => {
+          if (!s.state) return prev;
+          if (s.state === prev.state && s.updateVersion === prev.updateVersion) return prev;
+          return { ...prev, ...s };
+        });
+      }).catch(() => {});
+    }, 3_000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

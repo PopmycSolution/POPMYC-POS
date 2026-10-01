@@ -552,157 +552,120 @@ function createMainWindow() {
 }
 
 // ── Auto-updater ──────────────────────────────────────────────────────────────
+// ── Auto-updater ──────────────────────────────────────────────────────────────
+// Behaviour mirrors Kiro IDE exactly:
+//   1. App launches → check for update automatically (3s after window shows)
+//   2. Update found → download silently in background, NO dialog shown yet
+//   3. Download complete → ONE notification: "Restart & Update"
+//      User can click "Restart & Update" or "Later"
+//   4. "Restart & Update" → app closes silently, installs, relaunches
+//   5. "Later" → installs automatically next time the app is closed
+//   6. Check again every 4 hours while open
+//
+// The React UpdateToast mirrors the same state for in-app display.
 
-let updateInfo  = null;    // available update info, or null
-let updateState = 'idle';  // 'idle'|'checking'|'available'|'downloading'|'ready'|'error'|'no-update'
-let updateProgress = null; // download progress object
+let updateInfo     = null;
+let updateState    = 'idle';
+let updateProgress = null;
 
 function scheduleUpdateCheck() {
-  // First check: 15 seconds after window shows (gives React time to mount).
-  // Subsequent checks: every 4 hours.
-  setTimeout(() => checkForUpdates(), 15_000);
-  setInterval(() => checkForUpdates(), 4 * 60 * 60 * 1000);
+  setTimeout(() => checkForUpdates(), 3_000);          // 3s after window shows
+  setInterval(() => checkForUpdates(), 4 * 60 * 60 * 1000); // every 4h
 }
 
 async function checkForUpdates() {
-  if (IS_DEV) {
-    updateState = 'no-update';
-    broadcastUpdateState();
-    return;
-  }
+  if (IS_DEV) { updateState = 'no-update'; broadcastUpdateState(); return; }
 
   try {
     const { autoUpdater } = require('electron-updater');
 
-    // IMPORTANT: autoDownload = false so the user can choose Update Now or Later
-    autoUpdater.autoDownload         = false;
-    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.autoDownload         = true;   // ← Kiro-style: download immediately, no prompt
+    autoUpdater.autoInstallOnAppQuit = true;   // install even if user clicks Later and closes
     autoUpdater.channel              = _UPDATE_CHANNEL;
     autoUpdater.allowPrerelease      = (_UPDATE_CHANNEL === 'beta');
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner:    _GH_OWNER,
-      repo:     _GH_REPO,
-      channel:  _UPDATE_CHANNEL,
-    });
-
+    autoUpdater.setFeedURL({ provider: 'github', owner: _GH_OWNER, repo: _GH_REPO, channel: _UPDATE_CHANNEL });
     autoUpdater.removeAllListeners();
 
     autoUpdater.on('checking-for-update', () => {
-      updateState = 'checking';
-      updateProgress = null;
-      broadcastUpdateState();
+      updateState = 'checking'; updateProgress = null; broadcastUpdateState();
     });
 
     autoUpdater.on('update-available', (info) => {
-      updateInfo  = info;
-      updateState = 'available';
-      broadcastUpdateState();
-      // Show a native OS dialog — works even on v1.0.0 customers who never had
-      // the React toast because this runs in the MAIN process, not the renderer.
-      showUpdateDialog(info);
+      // Download starts automatically — no dialog yet, just track state
+      updateInfo = info; updateState = 'available'; broadcastUpdateState();
+      console.log(`[Updater] Update v${info.version} found — downloading silently…`);
     });
 
     autoUpdater.on('update-not-available', () => {
-      updateState = 'no-update';
-      broadcastUpdateState();
+      updateState = 'no-update'; broadcastUpdateState();
     });
 
     autoUpdater.on('download-progress', (progress) => {
-      updateState    = 'downloading';
-      updateProgress = progress;
-      broadcastUpdateState();
+      updateState = 'downloading'; updateProgress = progress; broadcastUpdateState();
     });
 
     autoUpdater.on('update-downloaded', (info) => {
-      updateInfo     = info;
-      updateState    = 'ready';
-      updateProgress = null;
+      // Download complete — NOW show the single notification (Kiro-style)
+      updateInfo = info; updateState = 'ready'; updateProgress = null;
       broadcastUpdateState();
-      // Show another dialog offering to install immediately
-      showInstallDialog(info);
+      showRestartNotification(info);
     });
 
     autoUpdater.on('error', (err) => {
-      console.log('[Updater] Non-critical update error:', err.message);
-      updateState = 'error';
-      broadcastUpdateState();
+      console.log('[Updater] Non-critical error:', err.message);
+      updateState = 'error'; broadcastUpdateState();
     });
 
-    updateState = 'checking';
-    broadcastUpdateState();
+    updateState = 'checking'; broadcastUpdateState();
     await autoUpdater.checkForUpdates();
 
   } catch (err) {
     console.log('[Updater] Not available:', err.message);
-    updateState = 'no-update';
-    broadcastUpdateState();
+    updateState = 'no-update'; broadcastUpdateState();
   }
 }
 
 /**
- * Native dialog shown immediately when an update is found.
- * Works on every installed version including v1.0.0 — no React required.
+ * The ONE notification the user ever sees — shown only when download is done.
+ * Exactly like Kiro: "Restart to update" with a Later option.
  */
-async function showUpdateDialog(info) {
+async function showRestartNotification(info) {
   if (!mainWindow) return;
-  const versionText = info?.version ? `v${info.version}` : 'a new version';
+  const ver = info?.version ? `v${info.version}` : 'a new version';
   const result = await dialog.showMessageBox(mainWindow, {
     type:      'info',
-    title:     `${APP_NAME} — Update Available`,
-    message:   `${APP_NAME} ${versionText} is available`,
-    detail:    `You are currently on v${APP_VERSION}.\n\nWould you like to download and install the update now? It only takes about 30 seconds.\n\nYour business data is never affected by updates.`,
-    buttons:   ['Update Now', 'Later'],
+    title:     `${APP_NAME} — Update Ready`,
+    message:   `${APP_NAME} ${ver} is ready to install`,
+    detail:    `The update was downloaded in the background.\n\nClick "Restart & Update" — the app will close and reopen on the new version automatically.\n\nYour business data is never affected.\n\nOr click "Later" — it will install next time you close the app.`,
+    buttons:   ['Restart & Update', 'Later'],
     defaultId: 0,
     cancelId:  1,
-    icon:      path.join(__dirname, 'resources', 'icon.ico'),
   });
-
-  if (result.response === 0) {
-    // User chose "Update Now" — start download
-    try {
-      const { autoUpdater } = require('electron-updater');
-      await autoUpdater.downloadUpdate();
-    } catch (err) {
-      console.error('[Updater] Download failed:', err.message);
-    }
-  }
+  if (result.response === 0) _doInstall();
 }
 
 /**
- * Native dialog shown when download completes and update is ready to install.
+ * Apply the update: close app silently, install, relaunch.
+ * isSilent=true  → NSIS /S flag (no wizard, no UAC prompts)
+ * relaunch=true  → app opens automatically after install
  */
-async function showInstallDialog(info) {
-  if (!mainWindow) return;
-  const versionText = info?.version ? `v${info.version}` : 'the update';
-  const result = await dialog.showMessageBox(mainWindow, {
-    type:      'info',
-    title:     `${APP_NAME} — Ready to Install`,
-    message:   `${APP_NAME} ${versionText} is ready`,
-    detail:    `The update has been downloaded. Click "Restart & Install" to apply it now — the app will reopen automatically in about 30 seconds.\n\nOr click "Later" to install the next time you close the app.`,
-    buttons:   ['Restart & Install', 'Later'],
-    defaultId: 0,
-    cancelId:  1,
-    icon:      path.join(__dirname, 'resources', 'icon.ico'),
-  });
-
-  if (result.response === 0) {
-    try {
-      const { autoUpdater } = require('electron-updater');
-      autoUpdater.quitAndInstall(false, true);
-    } catch (err) {
-      console.error('[Updater] Install failed:', err.message);
-    }
+function _doInstall() {
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.quitAndInstall(true, true);
+  } catch (err) {
+    console.error('[Updater] Install failed:', err.message);
+    app.quit();
   }
 }
 
-function broadcastUpdateState(extra = null) {
+function broadcastUpdateState() {
   const payload = {
     state:         updateState,
     version:       APP_VERSION,
-    updateVersion: updateInfo?.version   ?? null,
+    updateVersion: updateInfo?.version      ?? null,
     releaseNotes:  updateInfo?.releaseNotes ?? null,
-    progress:      updateProgress ?? extra ?? null,
+    progress:      updateProgress ?? null,
   };
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('updater:state', payload);
@@ -773,12 +736,7 @@ ipcMain.handle('updater:download', async () => {
 });
 
 ipcMain.handle('updater:install', () => {
-  try {
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.quitAndInstall(false, true);
-  } catch (err) {
-    console.error('[Updater] Install failed:', err.message);
-  }
+  _doInstall();
 });
 
 // Open PostgreSQL download page in browser
