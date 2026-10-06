@@ -12,6 +12,8 @@ import { formatCurrency, formatDate } from '@/utils/format';
 import { usePurchaseStore, type PurchaseOrder, type PurchaseItem } from '@/stores/purchase.store';
 import { useBranchFilter } from '@/hooks/useBranchFilter';
 import { useBranchStore } from '@/stores/branch.store';
+import { useProductStore } from '@/stores/product.store';
+import { useSupplierStore } from '@/stores/supplier.store';
 import api from '@/services/api';
 import * as purchasesService from '@/services/purchases.service';
 
@@ -58,7 +60,7 @@ const statusFilters = [
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 function blankItem(): Omit<PurchaseItem, 'id' | 'subtotal' | 'receivedQty'> {
-  return { productName: '', sku: '', quantity: 1, unitPrice: 0, expiryDate: null };
+  return { productId: undefined, productName: '', sku: '', quantity: 1, unitPrice: 0, expiryDate: null };
 }
 
 type DraftItem = Omit<PurchaseItem, 'id' | 'subtotal' | 'receivedQty'>;
@@ -192,6 +194,32 @@ export default function PurchasesPage() {
 
   const activeBranchId = useBranchStore((s) => s.activeBranchId);
 
+  // Product + supplier stores — used for UUID resolution when creating POs
+  const allProducts  = useProductStore((s) => s.products);
+  const allSuppliers = useSupplierStore((s) => s.suppliers);
+
+  // ── Product/supplier search suggestions for the PO form ────────────────────
+  const [productSearchIdx,  setProductSearchIdx]  = useState<number | null>(null);
+  const [productSearchTerm, setProductSearchTerm] = useState('');
+  const [supplierSearch,    setSupplierSearch]    = useState('');
+  const [supplierSugOpen,   setSupplierSugOpen]   = useState(false);
+
+  const productSuggestions = useMemo(() => {
+    if (productSearchIdx === null || !productSearchTerm.trim()) return [];
+    const t = productSearchTerm.toLowerCase();
+    return allProducts
+      .filter((p) => p.isActive && (p.name.toLowerCase().includes(t) || p.sku.toLowerCase().includes(t)))
+      .slice(0, 8);
+  }, [allProducts, productSearchTerm, productSearchIdx]);
+
+  const supplierSuggestions = useMemo(() => {
+    if (!supplierSearch.trim()) return allSuppliers.filter((s) => s.isActive).slice(0, 8);
+    const t = supplierSearch.toLowerCase();
+    return allSuppliers
+      .filter((s) => s.isActive && (s.name.toLowerCase().includes(t) || s.code.toLowerCase().includes(t)))
+      .slice(0, 8);
+  }, [allSuppliers, supplierSearch]);
+
   // ── Branch filter ───────────────────────────────────────────────────────────
   const { filterByBranch, stampBranch, activeBranchName, effectiveBranchId } = useBranchFilter();
   const branchOrders = filterByBranch(orders);
@@ -240,15 +268,28 @@ export default function PurchasesPage() {
   function closeDetail() { setDetailOpen(false); setSelectedOrder(null); }
 
   // ── Item helpers (new PO form) ──────────────────────────────────────────────
-  function updateItem(index: number, field: keyof DraftItem, value: string | number | null) {
+  function updateItem(index: number, field: keyof DraftItem, value: string | number | null | undefined) {
     setFormItems((prev) =>
       prev.map((item, i) =>
         i === index
-          ? { ...item, [field]: (field === 'productName' || field === 'sku' || field === 'expiryDate') ? value : Number(value) }
+          ? { ...item, [field]: (field === 'productName' || field === 'sku' || field === 'expiryDate' || field === 'productId') ? value : Number(value) }
           : item
       )
     );
   }
+
+  function pickProduct(index: number, product: { id: string; name: string; sku: string; price: number }) {
+    setFormItems((prev) =>
+      prev.map((item, i) =>
+        i === index
+          ? { ...item, productId: product.id, productName: product.name, sku: product.sku, unitPrice: item.unitPrice || product.price }
+          : item
+      )
+    );
+    setProductSearchIdx(null);
+    setProductSearchTerm('');
+  }
+
   const addItem    = () => setFormItems((p) => [...p, blankItem()]);
   const removeItem = (i: number) => setFormItems((p) => p.filter((_, idx) => idx !== i));
 
@@ -366,9 +407,11 @@ export default function PurchasesPage() {
 
   function openAddModal() {
     setFormSupplier(''); setFormSupplierId('');
+    setSupplierSearch(''); setSupplierSugOpen(false);
     setFormOrderDate(new Date().toISOString().slice(0, 10));
     setFormExpectedDate(''); setFormStatus('DRAFT'); setFormNotes('');
     setFormItems([blankItem()]);
+    setProductSearchIdx(null); setProductSearchTerm('');
     setImportErrors([]); setImportSuccess(0); setShowImportResult(false);
     setFormError('');
     setAddModalOpen(true);
@@ -415,6 +458,43 @@ export default function PurchasesPage() {
         warehouseId = wList[0]?.id ?? null;
       } catch { /* no warehouse — proceed without */ }
 
+      // Resolve product UUIDs: use productId if already set (from autocomplete),
+      // otherwise look up by SKU or name in the product store, then try backend search.
+      const resolvedItems = await Promise.all(
+        validItems.map(async (i) => {
+          let productUuid = i.productId;
+          if (!productUuid) {
+            // Try local store first
+            const match = allProducts.find(
+              (p) => (i.sku && p.sku === i.sku) || p.name.toLowerCase() === i.productName.toLowerCase()
+            );
+            if (match) {
+              productUuid = match.id;
+            } else if (i.sku) {
+              // Try backend search by SKU
+              try {
+                const r = await api.get<{ results?: { id: string }[] } | { id: string }[]>(
+                  '/products/', { params: { search: i.sku, limit: 1 } }
+                );
+                const list = Array.isArray(r.data) ? r.data : (r.data as { results?: { id: string }[] }).results ?? [];
+                if (list[0]?.id) productUuid = list[0].id;
+              } catch { /* not found — will fail validation below */ }
+            }
+          }
+          return { ...i, productId: productUuid };
+        })
+      );
+
+      const itemsWithUUIDs = resolvedItems.filter((i) => i.productId);
+      if (itemsWithUUIDs.length === 0) {
+        setFormError('No products could be matched to catalog items. Please search and select products from your catalog.');
+        setFormSaving(false);
+        return;
+      }
+      if (itemsWithUUIDs.length < resolvedItems.length) {
+        setFormError(`Warning: ${resolvedItems.length - itemsWithUUIDs.length} item(s) not found in catalog and were skipped.`);
+      }
+
       const newOrder = await purchasesService.createOrder({
         supplier:      formSupplierId || null,
         branch:        activeBranchId ?? null,
@@ -422,8 +502,8 @@ export default function PurchasesPage() {
         order_date:    formOrderDate,
         expected_date: formExpectedDate || null,
         notes:         formNotes.trim(),
-        items: validItems.map((i) => ({
-          product:     i.sku || i.productName,   // will be resolved by backend via SKU
+        items: itemsWithUUIDs.map((i) => ({
+          product:     i.productId!,   // now a real UUID ✓
           qty_ordered: i.quantity,
           unit_cost:   i.unitPrice,
           expiry_date: i.expiryDate ?? null,
@@ -472,6 +552,7 @@ export default function PurchasesPage() {
     setReceiveError('');
     setReceiveItems(order.items.map((item) => ({
       purchaseOrderItemId: item.id,
+      productId:           item.productId,   // carry UUID from mapItem
       productName:         item.productName,
       sku:                 item.sku,
       qtyOrdered:          item.quantity,
@@ -533,7 +614,7 @@ export default function PurchasesPage() {
         notes:         receiveNotes,
         items: itemsToSend.map((i) => ({
           purchase_order_item: i.purchaseOrderItemId ?? null,
-          product:             i.sku || i.productName,
+          product:             i.productId ?? (i.sku || i.productName),  // prefer UUID
           qty_received:        i.qtyToReceive,
           unit_cost:           i.unitCost,
           expiry_date:         i.expiryDate || null,
@@ -721,11 +802,51 @@ export default function PurchasesPage() {
             </div>
             <div className="p-5 space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="sm:col-span-2">
-                  <label className="text-xs font-semibold text-muted-600 mb-1 block">Supplier Name *</label>
-                  <input value={formSupplier} onChange={(e) => setFormSupplier(e.target.value)}
-                    placeholder="e.g. Accra Wholesale Ltd"
-                    className="w-full h-10 px-3 rounded-xl bg-white border border-muted-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10" />
+                {/* Supplier search dropdown */}
+                <div className="sm:col-span-2 relative">
+                  <label className="text-xs font-semibold text-muted-600 mb-1 block">Supplier *</label>
+                  <input
+                    value={supplierSearch || formSupplier}
+                    onChange={(e) => {
+                      setSupplierSearch(e.target.value);
+                      setFormSupplier(e.target.value);
+                      setFormSupplierId('');
+                      setSupplierSugOpen(true);
+                    }}
+                    onFocus={() => setSupplierSugOpen(true)}
+                    onBlur={() => setTimeout(() => setSupplierSugOpen(false), 150)}
+                    placeholder="Search or type supplier name…"
+                    className="w-full h-10 px-3 rounded-xl bg-white border border-muted-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10"
+                  />
+                  {formSupplierId && (
+                    <span className="absolute right-3 top-8 text-[10px] font-semibold text-emerald-600">✓ linked</span>
+                  )}
+                  {supplierSugOpen && supplierSuggestions.length > 0 && (
+                    <div className="absolute z-50 left-0 top-full mt-1 w-full bg-white border border-muted-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                      {supplierSuggestions.map((s) => (
+                        <button
+                          key={s.id} type="button"
+                          onMouseDown={() => {
+                            setFormSupplier(s.name);
+                            setFormSupplierId(s.id);
+                            setSupplierSearch(s.name);
+                            setSupplierSugOpen(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-muted-50 transition-colors"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold text-[#1E293B] truncate">{s.name}</p>
+                            <p className="text-[11px] text-muted-400">{s.code} · {s.supplierType}</p>
+                          </div>
+                        </button>
+                      ))}
+                      {!allSuppliers.some((s) => s.name.toLowerCase() === formSupplier.toLowerCase()) && formSupplier.trim() && (
+                        <div className="px-3 py-2 border-t border-muted-100">
+                          <p className="text-[11px] text-muted-400">No match — PO will use entered name without backend link</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-600 mb-1 block">Order Date</label>
@@ -823,13 +944,57 @@ export default function PurchasesPage() {
                 <div className="space-y-2">
                   {formItems.map((item, index) => (
                     <div key={index} className="grid grid-cols-1 sm:grid-cols-[1fr_90px_100px_110px_36px] gap-2 items-start bg-muted-50/60 rounded-xl p-3 sm:p-0 sm:bg-transparent">
-                      <div className="flex flex-col gap-1.5">
-                        <input value={item.productName} onChange={(e) => updateItem(index, 'productName', e.target.value)}
-                          placeholder="Product name *"
-                          className="w-full h-9 px-3 rounded-lg bg-white border border-muted-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10" />
-                        <input value={item.sku} onChange={(e) => updateItem(index, 'sku', e.target.value)}
+                      {/* Product search column */}
+                      <div className="relative flex flex-col gap-1.5">
+                        <div className="relative">
+                          <input
+                            value={productSearchIdx === index ? productSearchTerm : item.productName}
+                            onChange={(e) => {
+                              setProductSearchIdx(index);
+                              setProductSearchTerm(e.target.value);
+                              updateItem(index, 'productName', e.target.value);
+                              updateItem(index, 'productId', undefined);
+                            }}
+                            onFocus={() => { setProductSearchIdx(index); setProductSearchTerm(item.productName); }}
+                            onBlur={() => setTimeout(() => { if (productSearchIdx === index) setProductSearchIdx(null); }, 200)}
+                            placeholder="Search product *"
+                            className="w-full h-9 px-3 rounded-lg bg-white border border-muted-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10"
+                          />
+                          {item.productId && (
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-emerald-600">✓</span>
+                          )}
+                        </div>
+                        {/* SKU read-only when product is linked */}
+                        <input
+                          value={item.sku}
+                          onChange={(e) => updateItem(index, 'sku', e.target.value)}
+                          readOnly={!!item.productId}
                           placeholder="SKU (optional)"
-                          className="w-full h-8 px-3 rounded-lg bg-white border border-muted-200 text-xs text-muted-500 focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10" />
+                          className="w-full h-8 px-3 rounded-lg bg-white border border-muted-200 text-xs text-muted-500 focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10"
+                        />
+                        {/* Product suggestions dropdown */}
+                        {productSearchIdx === index && productSuggestions.length > 0 && (
+                          <div className="absolute z-50 left-0 top-9 w-full bg-white border border-muted-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                            {productSuggestions.map((p) => (
+                              <button
+                                key={p.id} type="button"
+                                onMouseDown={() => pickProduct(index, p)}
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-muted-50 transition-colors"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-[#1E293B] truncate">{p.name}</p>
+                                  <p className="text-[11px] text-muted-400 font-mono">{p.sku}</p>
+                                </div>
+                                <span className="text-xs text-muted-500 shrink-0">{formatCurrency(p.price)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {productSearchIdx === index && productSearchTerm.trim() && productSuggestions.length === 0 && (
+                          <div className="absolute z-50 left-0 top-9 w-full bg-white border border-muted-200 rounded-xl shadow-sm px-3 py-2">
+                            <p className="text-[11px] text-muted-400">No products match — item will be saved by name only</p>
+                          </div>
+                        )}
                       </div>
                       <input type="number" min="1" value={item.quantity} onChange={(e) => updateItem(index, 'quantity', e.target.value)}
                         className="h-9 px-3 rounded-lg bg-white border border-muted-200 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10 w-full" />

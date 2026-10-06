@@ -395,6 +395,7 @@ export default function SuppliersPage() {
   const deleteSupplier        = useSupplierStore(s => s.deleteSupplier);
   const addTransaction        = useSupplierStore(s => s.addTransaction);
   const syncSuppliersFromApi  = useSupplierStore(s => s.syncSuppliersFromApi);
+  const syncTransactionsFromApi = useSupplierStore(s => s.syncTransactionsFromApi);
 
   // ── Fetch suppliers from backend on mount (skipped in local/demo mode) ─────
   useEffect(() => {
@@ -524,6 +525,12 @@ export default function SuppliersPage() {
     setSelectedSupplier(s); setTxTypeFilter('all');
     setDetailTab('transactions'); setGoodsSearch(''); setGoodsUnitFilter('all');
     setDetailOpen(true);
+    // Fetch transactions from backend in background (keeps history fresh on new PC)
+    if (!isLocalSession()) {
+      suppliersService.fetchTransactions(s.id)
+        .then((txs) => syncTransactionsFromApi(s.id, txs))
+        .catch(() => { /* silently keep local transactions */ });
+    }
   }
   function closeDetail() { setDetailOpen(false); setSelectedSupplier(null); }
 
@@ -531,7 +538,15 @@ export default function SuppliersPage() {
     const snap = { ...s }; setDetailOpen(false); setSelectedSupplier(null);
     requestAnimationFrame(() => setDeleteTarget(snap));
   }
-  function handleDelete() { if (!deleteTarget) return; deleteSupplier(deleteTarget.id); setDeleteTarget(null); }
+  function handleDelete() {
+    if (!deleteTarget) return;
+    deleteSupplier(deleteTarget.id);   // remove from local store immediately
+    if (!isLocalSession()) {
+      void suppliersService.deactivateSupplier(deleteTarget.id)
+        .catch(() => { /* already removed locally — ignore */ });
+    }
+    setDeleteTarget(null);
+  }
 
   function handleAddSupplier() {
     if (!formData.name.trim() || !formData.code.trim()) return;
@@ -615,6 +630,29 @@ export default function SuppliersPage() {
       });
     }
     setTxFormErr(''); setTxForm(emptyTxForm()); setAddTxOpen(false);
+
+    // ── Persist transaction to backend (fire-and-forget) ──────────────────────
+    if (!isLocalSession() && sup) {
+      const txType = txForm.type;
+      const txRef  = txForm.reference.trim();
+      const txDate = txForm.transactionDate;
+      const txNotes = txForm.notes.trim();
+      let backendAmount: number;
+      if (txType === 'INVOICE' && invoiceDraft) {
+        backendAmount = invoiceDraft.total;
+      } else {
+        const rawAmt = parseFloat(txForm.amount);
+        backendAmount = isNaN(rawAmt) ? 0 : Math.abs(rawAmt);
+      }
+      void suppliersService.recordTransaction({
+        supplier:         sup.id,
+        type:             txType,
+        reference:        txRef,
+        amount:           backendAmount,
+        transaction_date: txDate,
+        notes:            txNotes,
+      }).catch(() => { /* already saved locally */ });
+    }
   }
 
   function updateLine(idx: number, patch: Partial<LineItemDraft>) {

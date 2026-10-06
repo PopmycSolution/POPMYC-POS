@@ -6,6 +6,7 @@ export type PaymentStatus = 'UNPAID' | 'PARTIAL' | 'PAID';
 
 export interface PurchaseItem {
   id: string;
+  productId?: string;   // backend UUID — required for receive_goods API call
   productName: string;
   sku: string;
   quantity: number;

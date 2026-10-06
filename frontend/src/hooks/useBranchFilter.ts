@@ -64,7 +64,8 @@ export function useBranchFilter() {
   /**
    * Filters an array of records by branch.
    * - Super Admin with no effectiveBranchId (All Branches view) → returns all records
-   * - effectiveBranchId set → returns only records whose branchId matches
+   * - effectiveBranchId set → returns records whose branchId matches OR branchId is null
+   *   (null means "business-wide" — Suppliers, POs without a branch are shown to everyone)
    * - No branch resolved and not Super Admin → returns empty (safe — no data leakage)
    */
   function filterByBranch<T extends { branchId?: string | null }>(items: T[]): T[] {
@@ -72,7 +73,12 @@ export function useBranchFilter() {
     if (isSuperAdmin && !effectiveBranchId) return items;
     // Branch selected (Super Admin scoping or regular user)
     if (effectiveBranchId) {
-      return items.filter((item) => item.branchId === effectiveBranchId);
+      return items.filter(
+        (item) =>
+          item.branchId === effectiveBranchId ||
+          item.branchId === null ||
+          item.branchId === undefined,
+      );
     }
     // No branch resolved and not Super Admin → show nothing to avoid data leakage
     return [];

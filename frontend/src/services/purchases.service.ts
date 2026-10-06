@@ -80,6 +80,7 @@ interface PaginatedResponse<T> {
 export function mapItem(raw: RawPurchaseItem): PurchaseItem {
   return {
     id:           raw.id,
+    productId:    raw.product ?? undefined,   // backend UUID — needed for receive_goods
     productName:  raw.product_name ?? '',
     sku:          raw.product_sku  ?? '',
     quantity:     Number(raw.qty_ordered),
