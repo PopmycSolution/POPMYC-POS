@@ -5,24 +5,49 @@ import { useAuthStore } from '@/stores/auth.store';
 
 /**
  * Imperatively clears auth state and redirects to /login.
- * Uses the Zustand store directly (no React hook) so it's safe to call
- * from outside a component (e.g. an axios interceptor).
- * We use React Router's history via a global ref instead of window.location
- * so we don't blow away the SPA state on a hard reload.
+ * Only called when the refresh token itself is expired/invalid.
+ * With 24h access + 90d refresh tokens, this should almost never happen
+ * during normal POS usage.
  */
 function forceLogout() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
   localStorage.removeItem('user');
   useAuthStore.getState().logout();
-  // Use React Router's navigate if available, fall back to location replace
-  // (replace avoids adding the /login entry to browser history)
   const nav = (window as Window & { __navigate?: (path: string) => void }).__navigate;
   if (nav) {
     nav('/login');
   } else {
     window.location.replace('/login');
   }
+}
+
+/**
+ * Silently refresh the access token using the stored refresh token.
+ * Called proactively on app startup so the token is always fresh.
+ * Never throws — failures are silently ignored (user keeps their session).
+ */
+export async function silentRefreshToken(): Promise<void> {
+  if (isLocalDemoSession()) return;
+  try {
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (!refreshToken) return;
+    // Only refresh if access token is within 2 hours of expiring
+    const raw = localStorage.getItem('access_token') ?? '';
+    if (raw) {
+      try {
+        const [, payload] = raw.split('.');
+        const { exp } = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as { exp: number };
+        const twoHoursFromNow = Date.now() / 1000 + 7200;
+        if (exp > twoHoursFromNow) return; // still has plenty of time — skip
+      } catch { /* can't decode — refresh anyway */ }
+    }
+    const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, { refresh: refreshToken });
+    if (response.data?.access) {
+      localStorage.setItem('access_token', response.data.access);
+      if (response.data.refresh) localStorage.setItem('refresh_token', response.data.refresh);
+    }
+  } catch { /* silently ignore — user keeps existing token */ }
 }
 
 const api: AxiosInstance = axios.create({

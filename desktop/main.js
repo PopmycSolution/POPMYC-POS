@@ -823,6 +823,22 @@ startupInProgress = false;
 }
 
 app.whenReady().then(async () => {
+  // ── Architecture guard — show friendly error on 32-bit Windows ────────────
+  // The bundled Python and Electron are x64-only. If somehow this runs on
+  // a 32-bit system, show a clear message instead of a cryptic crash.
+  if (process.arch !== 'x64' && process.arch !== 'arm64') {
+    dialog.showErrorBox(
+      `${APP_NAME} — Incompatible System`,
+      `POPMYC POS requires a 64-bit version of Windows (Windows 10 or later).\n\n` +
+      `Your computer is running a ${process.arch} system, which is not compatible.\n\n` +
+      `Please contact POPMYC support:\n` +
+      `  Phone: 0247071869 / 0256251295\n` +
+      `  Email: popmychubsolution@gmail.com`
+    );
+    app.quit();
+    return;
+  }
+
   createSplashWindow();
 
   const dataDir = ensureDataDir();

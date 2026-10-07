@@ -32,7 +32,7 @@
 ; Service name:      POPMYCBackend
 
 #define AppName       "POPMYC POS"
-#define AppVersion    "1.0.0"
+#define AppVersion    "1.1.2"
 #define AppPublisher  "POPMyC Solutions"
 #define AppExeName    "POPMYC POS.exe"
 #define AppURL        "https://popmycsolutions.com"
@@ -72,6 +72,12 @@ PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
+; ── Architecture ─────────────────────────────────────────────────────────────
+; POPMYC POS requires 64-bit Windows (x64 or ARM64 with x64 emulation).
+; The bundled Electron runtime and Python interpreter are both x64 binaries.
+; Inno Setup will show a friendly error if the installer is run on 32-bit Windows.
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 ; ── Critical: do NOT touch %PROGRAMDATA%\POPMYC POS\ on uninstall ──────────
 ; Customer data (database config, logs, media, backups) lives there.
 UninstallFilesDir={app}
@@ -1344,6 +1350,26 @@ end;
 // ─────────────────────────────────────────────────────────────────────────────
 function InitializeSetup(): Boolean;
 begin
+  // ── 64-bit Windows check ───────────────────────────────────────────────────
+  // POPMYC POS requires 64-bit Windows. The bundled Electron app and Python
+  // runtime are x64 binaries and cannot run on 32-bit Windows.
+  if not Is64BitInstallMode() then begin
+    MsgBox(
+      'POPMYC POS requires a 64-bit version of Windows.' + #13#10 + #13#10 +
+      'Your computer is running a 32-bit (x86) version of Windows,' + #13#10 +
+      'which is not compatible with POPMYC POS.' + #13#10 + #13#10 +
+      'POPMYC POS supports:' + #13#10 +
+      '  - Windows 10 (64-bit) or later' + #13#10 +
+      '  - Windows 11 (64-bit)' + #13#10 + #13#10 +
+      'Please contact POPMYC support for assistance:' + #13#10 +
+      '  Phone: 0247071869 / 0256251295' + #13#10 +
+      '  Email: popmychubsolution@gmail.com',
+      mbError, MB_OK
+    );
+    Result := False;
+    Exit;
+  end;
+
   // ── Administrator privilege check ─────────────────────────────────────────
   // Verify that this process is actually running under an administrator account
   // before attempting PostgreSQL installation. The EDB PostgreSQL installer

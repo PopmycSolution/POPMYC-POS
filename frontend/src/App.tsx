@@ -36,6 +36,7 @@ import { APP_NAME } from '@/utils/constants';
 import { Home, ArrowLeft } from 'lucide-react';
 import { fetchSetupStatus } from '@/services/setup.service';
 import { retryPendingCompletion } from '@/services/cloudLicense.service';
+import { silentRefreshToken } from '@/services/api';
 import UpdateToast from '@/components/updater/UpdateToast';
 
 // ── Setup guard — checks first-run state once on cold start ───────────────────

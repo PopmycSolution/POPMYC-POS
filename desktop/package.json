@@ -88,6 +88,7 @@
         }
       ],
       "icon": "resources/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "signtoolOptions": {
         "publisherName": "POPMyC Solutions",
         "signingHashAlgorithms": [
