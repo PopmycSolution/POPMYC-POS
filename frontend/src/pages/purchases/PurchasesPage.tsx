@@ -14,6 +14,7 @@ import { useBranchFilter } from '@/hooks/useBranchFilter';
 import { useBranchStore } from '@/stores/branch.store';
 import { useProductStore } from '@/stores/product.store';
 import { useSupplierStore } from '@/stores/supplier.store';
+import { useSettingsStore } from '@/stores/settings.store';
 import api from '@/services/api';
 import * as purchasesService from '@/services/purchases.service';
 
@@ -193,6 +194,7 @@ export default function PurchasesPage() {
   const cancelOrderLocal = usePurchaseStore((s) => s.cancelOrder);
 
   const activeBranchId = useBranchStore((s) => s.activeBranchId);
+  const isSingleBranch = useSettingsStore((s) => s.isSingleBranch);
 
   // Product + supplier stores — used for UUID resolution when creating POs
   const allProducts  = useProductStore((s) => s.products);
@@ -655,7 +657,9 @@ export default function PurchasesPage() {
         <div>
           <h1 className="text-2xl font-bold text-[#1E293B] tracking-tight">Purchases</h1>
           <p className="text-sm text-muted-500 mt-0.5">
-            {activeBranchName !== 'All Branches'
+            {isSingleBranch
+              ? 'Purchase orders'
+              : activeBranchName !== 'All Branches'
               ? <><span className="font-semibold text-teal-700">{activeBranchName}</span> — purchase orders</>
               : 'All branches — purchase orders'}
           </p>

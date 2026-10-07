@@ -30,6 +30,7 @@ import { formatCurrency, formatDate } from '@/utils/format';
 import ChangePasswordModal from '@/components/auth/ChangePasswordModal';
 import ProfilePictureModal from '@/components/auth/ProfilePictureModal';
 import { useUpdater } from '@/hooks/useUpdater';
+import { playAlertSound, playNotificationSound } from '@/utils/sound';
 import api from '@/services/api';
 
 // ── License expiry banner ─────────────────────────────────────────────────────
@@ -696,6 +697,16 @@ export function MainLayout() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Play alert sound once when new alerts appear (e.g. stock drops below threshold)
+  const prevAlertCountRef = useRef(0);
+  useEffect(() => {
+    if (alertCount > 0 && prevAlertCountRef.current === 0) {
+      // First time alerts appear this session — play the alert chime
+      playAlertSound();
+    }
+    prevAlertCountRef.current = alertCount;
+  }, [alertCount]);
+
   // Build the current route — prefer the full path when it matches a known two-segment route
   const _rawSegment = ('/' + location.pathname.split('/')[1]) as AppRoute;
   const _fullPath   = location.pathname as AppRoute;
@@ -989,7 +1000,14 @@ export function MainLayout() {
 
               {/* Notifications */}
               <div ref={notifRef} className="relative">
-                <HeaderIconBtn onClick={() => setNotifOpen((v) => !v)} title="Notifications" badge={alertCount}>
+                <HeaderIconBtn
+                  onClick={() => {
+                    setNotifOpen((v) => !v);
+                    if (!notifOpen && alertCount > 0) playNotificationSound();
+                  }}
+                  title="Notifications"
+                  badge={alertCount}
+                >
                   <Bell className="h-4.5 w-4.5" />
                 </HeaderIconBtn>
                 {notifOpen && <NotificationsPanel onClose={() => setNotifOpen(false)} />}

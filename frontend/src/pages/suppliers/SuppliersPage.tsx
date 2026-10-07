@@ -411,7 +411,7 @@ export default function SuppliersPage() {
   const units          = useUnitStore(s => s.units);
 
   // ── Branch filter ──────────────────────────────────────────────────────────
-  const { filterByBranch, stampBranch, activeBranchName, effectiveBranchId } = useBranchFilter();
+  const { filterByBranch, activeBranchName, effectiveBranchId } = useBranchFilter();
   const branchSuppliers = filterByBranch(suppliers);
 
   // ── computed ──────────────────────────────────────────────────────────────
@@ -551,7 +551,8 @@ export default function SuppliersPage() {
   function handleAddSupplier() {
     if (!formData.name.trim() || !formData.code.trim()) return;
     // Local write first (instant feedback)
-    addSupplier({ ...formData, creditLimit: Number(formData.creditLimit) || 0, creditDays: Number(formData.creditDays) || 0, isActive: true, branchId: stampBranch });
+    // branchId=null because suppliers are business-wide (no branch FK on backend)
+    addSupplier({ ...formData, creditLimit: Number(formData.creditLimit) || 0, creditDays: Number(formData.creditDays) || 0, isActive: true, branchId: null });
     // Also persist to backend if connected
     if (!isLocalSession()) {
       void suppliersService.createSupplier({

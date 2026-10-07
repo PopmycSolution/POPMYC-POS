@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Server, Cpu, Database, Globe, Shield,
   AlertTriangle, Check, RefreshCw, Trash2,
@@ -57,13 +57,26 @@ function Toggle({ enabled, onChange, disabled = false }: { enabled: boolean; onC
 
 const inputClass = 'w-full h-10 px-3 rounded-xl bg-white border border-muted-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#1E293B]/10 transition-shadow';
 
-const VERSION = '1.0.0';
+// Version is read dynamically from Electron (desktop) or falls back to the
+// build-time constant. This ensures the About section always matches reality.
+const FALLBACK_VERSION = '1.1.2';  // updated each release
 
 export default function SystemSettingsPage() {
   const [config,  setConfig]  = useState<SystemConfig>(loadConfig);
   const [saved,   setSaved]   = useState(false);
   const [cleared, setCleared] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [version, setVersion] = useState(FALLBACK_VERSION);
+
+  // Read real app version from Electron on desktop
+  useEffect(() => {
+    const desktop = (window as Window & { popmycDesktop?: { getVersion?: () => Promise<string> } }).popmycDesktop;
+    if (desktop?.getVersion) {
+      desktop.getVersion()
+        .then((v) => { if (v) setVersion(v); })
+        .catch(() => { /* keep fallback */ });
+    }
+  }, []);
 
   function updateConfig(patch: Partial<SystemConfig>) {
     setConfig((prev) => ({ ...prev, ...patch }));
@@ -125,7 +138,7 @@ export default function SystemSettingsPage() {
       {/* System info cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { icon: Cpu,       label: 'Version',       value: VERSION,          sub: 'Retail Edition'    },
+          { icon: Cpu,       label: 'Version',       value: `v${version}`,    sub: 'Retail Edition'    },
           { icon: HardDrive, label: 'Local Storage',  value: `${storageUsedKB} KB`, sub: 'Used'      },
           { icon: Wifi,      label: 'API Base URL',   value: config.apiBaseUrl, sub: 'Endpoint'        },
           { icon: Clock,     label: 'Session Timeout',value: `${config.sessionTimeoutMinutes} min`, sub: 'Idle limit' },
@@ -306,7 +319,7 @@ export default function SystemSettingsPage() {
 
       {/* App info footer */}
       <div className="bg-white rounded-2xl border border-muted-100 p-4 flex items-center justify-between text-xs text-muted-400">
-        <span><span className="font-semibold text-muted-600">{APP_NAME}</span> · v{VERSION} · Retail Edition</span>
+        <span><span className="font-semibold text-muted-600">{APP_NAME}</span> · v{version} · Retail Edition</span>
         <span>Frontend: React + Vite · Backend: Django REST Framework</span>
       </div>
     </div>

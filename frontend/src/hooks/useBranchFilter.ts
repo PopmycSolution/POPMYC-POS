@@ -17,17 +17,22 @@
 import { useAuthStore }          from '@/stores/auth.store';
 import { useUserStore }          from '@/stores/user.store';
 import { useBranchStore }        from '@/stores/branch.store';
+import { useSettingsStore }      from '@/stores/settings.store';
 
 export function useBranchFilter() {
   const user        = useAuthStore((s) => s.user);
   const userRecords = useUserStore((s) => s.users);
   const activeBranchId = useBranchStore((s) => s.activeBranchId);
   const branches       = useBranchStore((s) => s.branches);
+  const isSingleBranch = useSettingsStore((s) => s.isSingleBranch);
 
   const isSuperAdmin = (user?.role ?? '') === 'SUPER_ADMIN';
 
   // ── Resolve the effective branch ID ─────────────────────────────────────────
   const effectiveBranchId: string | null = (() => {
+    // Single-branch mode: no branch concept — return null to show everything
+    if (isSingleBranch) return null;
+
     // Super Admin: use ONLY activeBranchId from the BranchSwitcher.
     // null = they chose "All Branches". Never override with UserRecord fallback.
     if (isSuperAdmin) return activeBranchId;
@@ -63,15 +68,18 @@ export function useBranchFilter() {
 
   /**
    * Filters an array of records by branch.
-   * - Super Admin with no effectiveBranchId (All Branches view) → returns all records
-   * - effectiveBranchId set → returns records whose branchId matches OR branchId is null
-   *   (null means "business-wide" — Suppliers, POs without a branch are shown to everyone)
-   * - No branch resolved and not Super Admin → returns empty (safe — no data leakage)
+   * - Single-branch mode → returns ALL items (branch concept doesn't exist)
+   * - Super Admin with no effectiveBranchId (All Branches) → returns all records
+   * - effectiveBranchId set → records whose branchId matches OR branchId is null
+   *   (null = business-wide, shown to everyone in that business)
+   * - No branch resolved and not Super Admin → returns empty (no data leakage)
    */
   function filterByBranch<T extends { branchId?: string | null }>(items: T[]): T[] {
-    // Super Admin with "All Branches" selected → show everything
+    // Single-branch: no filtering — everything belongs to this business
+    if (isSingleBranch) return items;
+    // Super Admin with "All Branches" → show everything
     if (isSuperAdmin && !effectiveBranchId) return items;
-    // Branch selected (Super Admin scoping or regular user)
+    // Branch selected
     if (effectiveBranchId) {
       return items.filter(
         (item) =>
@@ -80,18 +88,19 @@ export function useBranchFilter() {
           item.branchId === undefined,
       );
     }
-    // No branch resolved and not Super Admin → show nothing to avoid data leakage
+    // No branch resolved and not Super Admin → show nothing
     return [];
   }
 
-  /** The branchId to stamp onto a new record created by the current user */
-  const stampBranch: string | null = effectiveBranchId;
+  /** The branchId to stamp onto new records — null in single mode */
+  const stampBranch: string | null = isSingleBranch ? null : effectiveBranchId;
 
   return {
     effectiveBranchId,
     activeBranchName,
     activeBranch,
     isSuperAdmin,
+    isSingleBranch,
     filterByBranch,
     stampBranch,
   };

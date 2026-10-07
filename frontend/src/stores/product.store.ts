@@ -57,6 +57,37 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   addProduct: (data) => {
     const ts = new Date().toISOString();
+
+    // ── Deduplication: if a product with the same SKU or name already exists,
+    // increment its stock quantity instead of creating a duplicate.
+    const existing = get().products.find((p) => {
+      if (data.sku && p.sku && data.sku.trim() !== '' && p.sku.trim() !== '') {
+        return p.sku.toLowerCase().trim() === data.sku.toLowerCase().trim();
+      }
+      return p.name.toLowerCase().trim() === data.name.toLowerCase().trim();
+    });
+
+    if (existing) {
+      // Merge: add stock quantity, keep other existing fields, update timestamps
+      const merged: Product = {
+        ...existing,
+        stockQuantity: existing.stockQuantity + (Number(data.stockQuantity) || 0),
+        // Update cost/price if provided
+        ...(data.price     ? { price:     data.price     } : {}),
+        ...(data.cost      ? { cost:      data.cost      } : {}),
+        ...(data.imageUrl  ? { imageUrl:  data.imageUrl  } : {}),
+        ...(data.expiryDate ? { expiryDate: data.expiryDate } : {}),
+        updatedAt: ts,
+      };
+      set((state) => {
+        const next = state.products.map((p) => p.id === existing.id ? merged : p);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return { products: next };
+      });
+      return merged;
+    }
+
+    // New product
     const newProduct: Product = {
       id: genId(),
       createdAt: ts,
@@ -92,31 +123,64 @@ export const useProductStore = create<ProductStore>((set, get) => ({
 
   bulkImportProducts: (items) => {
     const ts = new Date().toISOString();
-    const newProducts: Product[] = items.map((data, idx) => ({
-      id: genId() + idx,
-      createdAt: ts,
-      updatedAt: ts,
-      name: data.name,
-      sku: data.sku,
-      price: Number(data.price) || 0,
-      stockQuantity: Number(data.stockQuantity) || 0,
-      description: data.description,
-      modelNumber: data.modelNumber,
-      cost: data.cost ? Number(data.cost) : undefined,
-      lowStockThreshold: data.lowStockThreshold ? Number(data.lowStockThreshold) : 10,
-      categoryId: data.categoryId || 'other',
-      barcode: data.barcode,
-      imageUrl: data.imageUrl,
-      isActive: data.isActive !== false,
-      expiryDate: data.expiryDate ?? null,
-      expiryAlertDays: data.expiryAlertDays ? Number(data.expiryAlertDays) : 30,
-    }));
+    const result: Product[] = [];
+
     set((state) => {
-      const next = [...newProducts, ...state.products];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return { products: next };
+      let products = [...state.products];
+
+      for (const data of items) {
+        // Dedup: match by SKU first, then by name
+        const existingIdx = products.findIndex((p) => {
+          if (data.sku && p.sku && data.sku.trim() !== '' && p.sku.trim() !== '') {
+            return p.sku.toLowerCase().trim() === data.sku.toLowerCase().trim();
+          }
+          return p.name.toLowerCase().trim() === data.name.toLowerCase().trim();
+        });
+
+        if (existingIdx !== -1) {
+          // Merge — add stock quantity
+          const existing = products[existingIdx];
+          const merged: Product = {
+            ...existing,
+            stockQuantity: existing.stockQuantity + (Number(data.stockQuantity) || 0),
+            ...(data.price     ? { price:     Number(data.price)     } : {}),
+            ...(data.cost      ? { cost:      Number(data.cost)      } : {}),
+            ...(data.expiryDate ? { expiryDate: data.expiryDate } : {}),
+            updatedAt: ts,
+          };
+          products[existingIdx] = merged;
+          result.push(merged);
+        } else {
+          // New product
+          const newProduct: Product = {
+            id: genId() + result.length,
+            createdAt: ts,
+            updatedAt: ts,
+            name: data.name,
+            sku: data.sku,
+            price: Number(data.price) || 0,
+            stockQuantity: Number(data.stockQuantity) || 0,
+            description: data.description,
+            modelNumber: data.modelNumber,
+            cost: data.cost ? Number(data.cost) : undefined,
+            lowStockThreshold: data.lowStockThreshold ? Number(data.lowStockThreshold) : 10,
+            categoryId: data.categoryId || 'other',
+            barcode: data.barcode,
+            imageUrl: data.imageUrl,
+            isActive: data.isActive !== false,
+            expiryDate: data.expiryDate ?? null,
+            expiryAlertDays: data.expiryAlertDays ? Number(data.expiryAlertDays) : 30,
+          };
+          products = [newProduct, ...products];
+          result.push(newProduct);
+        }
+      }
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+      return { products };
     });
-    return newProducts;
+
+    return result;
   },
 
   getProductById: (id) => get().products.find((p) => p.id === id),

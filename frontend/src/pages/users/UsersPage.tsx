@@ -10,6 +10,7 @@ import { formatDate } from '@/utils/format';
 import { useUserStore, type UserRecord, type UserRole, type UserStatus } from '@/stores/user.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { useBranchStore } from '@/stores/branch.store';
+import { useSettingsStore } from '@/stores/settings.store';
 import ChangePasswordModal from '@/components/auth/ChangePasswordModal';
 import { adminResetPassword } from '@/services/auth.service';
 
@@ -101,6 +102,7 @@ export default function UsersPage() {
   const currentUserRole = currentUser?.role ?? 'CASHIER';
   const canManagePasswords = currentUserRole === 'SUPER_ADMIN' || currentUserRole === 'ADMIN';
   const isSuperAdmin = currentUserRole === 'SUPER_ADMIN';
+  const isSingleBranch = useSettingsStore((s) => s.isSingleBranch);
 
   // Role options available when adding a new user — Admin cannot create Admin/SuperAdmin
   const availableRoleOptions = useMemo(() => {
@@ -423,7 +425,7 @@ export default function UsersPage() {
                 <th className="text-left font-semibold text-muted-600 px-4 py-3 hidden md:table-cell">Contact</th>
                 <th className="text-center font-semibold text-muted-600 px-4 py-3">Role</th>
                 <th className="text-center font-semibold text-muted-600 px-4 py-3 hidden sm:table-cell">Status</th>
-                <th className="text-left font-semibold text-muted-600 px-4 py-3 hidden lg:table-cell">Branch</th>
+                {!isSingleBranch && <th className="text-left font-semibold text-muted-600 px-4 py-3 hidden lg:table-cell">Branch</th>}
                 <th className="text-left font-semibold text-muted-600 px-4 py-3 hidden lg:table-cell">Last Login</th>
                 <th className="text-center font-semibold text-muted-600 px-4 py-3">Actions</th>
               </tr>
@@ -472,7 +474,7 @@ export default function UsersPage() {
                       <span className={clsx('rounded-full px-2.5 py-1 text-[11px] font-semibold', sc.color)}>{sc.label}</span>
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell">
-                      <span className="text-xs text-muted-600 flex items-center gap-1"><MapPin className="h-3 w-3" />{u.branch}</span>
+                      {!isSingleBranch && <span className="text-xs text-muted-600 flex items-center gap-1"><MapPin className="h-3 w-3" />{u.branch}</span>}
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell">
                       {u.lastLogin ? (
@@ -742,25 +744,27 @@ export default function UsersPage() {
               </div>
 
               {/* Role & Branch */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className={isSingleBranch ? '' : 'grid grid-cols-2 gap-4'}>
                 <div>
                   <label className="text-xs font-semibold text-muted-600 mb-1 block">Role</label>
                   <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })} className={inputClass}>
                     {availableRoleOptions.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-semibold text-muted-600 mb-1 block">Branch</label>
-                  <select
-                    value={formData.branch || defaultBranch}
-                    onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
-                    className={inputClass}
-                  >
-                    {activeBranches.map((b) => (
-                      <option key={b.id} value={b.name}>{b.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {!isSingleBranch && (
+                  <div>
+                    <label className="text-xs font-semibold text-muted-600 mb-1 block">Branch</label>
+                    <select
+                      value={formData.branch || defaultBranch}
+                      onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
+                      className={inputClass}
+                    >
+                      {activeBranches.map((b) => (
+                        <option key={b.id} value={b.name}>{b.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               {/* Password section */}
