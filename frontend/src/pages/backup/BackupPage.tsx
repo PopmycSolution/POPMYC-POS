@@ -1,10 +1,28 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   HardDrive, Download, Upload, Check, AlertTriangle,
   Clock, Trash2, RefreshCw, Info, Package,
-  Users, ShoppingCart, FileText, Database,
+  Users, ShoppingCart, FileText, Database, Cloud,
+  CloudOff, Loader2, Shield,
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import * as cloudBackupService from '@/services/cloudBackup.service';
+import type { CloudBackupEntry } from '@/services/cloudBackup.service';
+
+/** True when running with a real backend token */
+function isLiveSession(): boolean {
+  try {
+    const raw = localStorage.getItem('access_token') ?? '';
+    if (raw && !raw.startsWith('local-session-')) return true;
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    if (stored) {
+      const p = JSON.parse(stored) as { state?: { accessToken?: string } };
+      const t = p?.state?.accessToken ?? '';
+      if (t && !t.startsWith('local-session-')) return true;
+    }
+  } catch { /* noop */ }
+  return false;
+}
 
 // All localStorage keys that belong to this POS app
 const APP_STORE_KEYS = [
@@ -53,6 +71,84 @@ export default function BackupPage() {
   const [confirmId,  setConfirmId]  = useState<string | null>(null);
   const [backupLabel, setBackupLabel] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Cloud backup state ────────────────────────────────────────────────────
+  const [cloudBackups,       setCloudBackups]       = useState<CloudBackupEntry[]>([]);
+  const [cloudLoading,       setCloudLoading]       = useState(false);
+  const [cloudUploading,     setCloudUploading]     = useState(false);
+  const [cloudMsg,           setCloudMsg]           = useState('');
+  const [cloudMsgType,       setCloudMsgType]       = useState<'success' | 'error' | 'info'>('info');
+  const [cloudRestoreId,     setCloudRestoreId]     = useState<string | null>(null);
+  const [cloudRestoring,     setCloudRestoring]     = useState(false);
+  const [cloudDeleteId,      setCloudDeleteId]      = useState<string | null>(null);
+  const liveSession = isLiveSession();
+
+  const fetchCloudBackups = useCallback(async () => {
+    if (!liveSession) return;
+    setCloudLoading(true);
+    try {
+      const list = await cloudBackupService.listCloudBackups();
+      setCloudBackups(list);
+    } catch {
+      /* silently ignore — cloud may be offline */
+    } finally {
+      setCloudLoading(false);
+    }
+  }, [liveSession]);
+
+  useEffect(() => { void fetchCloudBackups(); }, [fetchCloudBackups]);
+
+  async function handleCloudUpload() {
+    setCloudUploading(true);
+    setCloudMsg('');
+    try {
+      const result = await cloudBackupService.uploadCloudBackup('Manual cloud backup');
+      setCloudMsg(`✅ Cloud backup uploaded — ${result.size_mb} MB`);
+      setCloudMsgType('success');
+      void fetchCloudBackups();
+    } catch (err: unknown) {
+      const ae = err as { response?: { data?: { detail?: string } } };
+      setCloudMsg(`❌ ${ae.response?.data?.detail ?? 'Cloud upload failed. Check your connection.'}`);
+      setCloudMsgType('error');
+    } finally {
+      setCloudUploading(false);
+    }
+  }
+
+  async function handleCloudRestore(id: string) {
+    setCloudRestoring(true);
+    setCloudMsg('Downloading cloud backup…');
+    setCloudMsgType('info');
+    try {
+      const blob = await cloudBackupService.downloadCloudBackup(id);
+      // Offer as a .sql.gz file download — admin can then import via Settings → Backup → Restore
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement('a');
+      const entry = cloudBackups.find((b) => b.id === id);
+      a.href     = url;
+      a.download = entry?.filename ?? `cloud-restore-${id}.sql.gz`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setCloudMsg('✅ Cloud backup downloaded. Go to Settings → Backup → Restore to apply it.');
+      setCloudMsgType('success');
+    } catch {
+      setCloudMsg('❌ Download failed. Try again.');
+      setCloudMsgType('error');
+    } finally {
+      setCloudRestoring(false);
+      setCloudRestoreId(null);
+    }
+  }
+
+  async function handleCloudDelete(id: string) {
+    try {
+      await cloudBackupService.deleteCloudBackup(id);
+      setCloudBackups((prev) => prev.filter((b) => b.id !== id));
+    } catch { /* silently ignore */ }
+    setCloudDeleteId(null);
+  }
 
   // Estimate sizes
   const storeSizes = useMemo(() =>
@@ -313,6 +409,157 @@ export default function BackupPage() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* ── Cloud Backup (Disaster Recovery) ── */}
+      <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.06)] border border-muted-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-muted-100 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-5 w-5 text-blue-500" />
+            <h2 className="text-sm font-bold text-[#1E293B]">Cloud Backup — Disaster Recovery</h2>
+          </div>
+          <button
+            onClick={() => void fetchCloudBackups()}
+            disabled={cloudLoading}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-500 hover:text-[#1E293B] transition-colors"
+          >
+            <RefreshCw className={clsx('h-3.5 w-3.5', cloudLoading && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Explanation */}
+          <div className="flex items-start gap-3 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
+            <Shield className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+            <div className="text-xs text-blue-700 leading-relaxed">
+              <strong>Protect against PC failure, fire, or data loss.</strong> Upload your database backup
+              to the POPMYC cloud. If your PC is ever replaced or lost, install POPMYC POS on the new
+              machine — your cloud backup will be offered for restore automatically.
+            </div>
+          </div>
+
+          {/* Not connected notice */}
+          {!liveSession && (
+            <div className="flex items-center gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+              <CloudOff className="h-4 w-4 text-amber-600 shrink-0" />
+              <p className="text-xs text-amber-700">
+                Cloud backup requires a live backend connection. Log in with your real credentials to enable it.
+              </p>
+            </div>
+          )}
+
+          {/* Cloud status message */}
+          {cloudMsg && (
+            <div className={clsx('flex items-center gap-2 rounded-xl px-4 py-3 text-sm border',
+              cloudMsgType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+              cloudMsgType === 'error'   ? 'bg-rose-50 border-rose-200 text-rose-700' :
+              'bg-blue-50 border-blue-200 text-blue-700'
+            )}>
+              {cloudMsgType === 'success' ? <Check className="h-4 w-4 shrink-0" /> :
+               cloudMsgType === 'error'   ? <AlertTriangle className="h-4 w-4 shrink-0" /> :
+               <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+              {cloudMsg}
+            </div>
+          )}
+
+          {/* Upload button */}
+          {liveSession && (
+            <button
+              onClick={() => void handleCloudUpload()}
+              disabled={cloudUploading || cloudRestoring}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors disabled:opacity-40 shadow-sm"
+            >
+              {cloudUploading
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading to cloud…</>
+                : <><Cloud className="h-4 w-4" /> Upload Backup to Cloud Now</>}
+            </button>
+          )}
+
+          {/* Cloud backup list */}
+          {liveSession && (
+            <div>
+              <p className="text-xs font-semibold text-muted-600 mb-2">
+                Cloud backups ({cloudBackups.length})
+                {cloudLoading && <Loader2 className="h-3 w-3 inline ml-1.5 animate-spin text-muted-400" />}
+              </p>
+
+              {cloudBackups.length === 0 && !cloudLoading ? (
+                <div className="rounded-xl border border-dashed border-muted-200 bg-muted-50 px-4 py-6 text-center">
+                  <Cloud className="h-8 w-8 mx-auto mb-2 text-muted-300" />
+                  <p className="text-xs text-muted-400 font-medium">No cloud backups yet</p>
+                  <p className="text-[11px] text-muted-400 mt-0.5">Click "Upload Backup to Cloud Now" to create your first cloud backup.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-muted-200 overflow-hidden divide-y divide-muted-100">
+                  {cloudBackups.map((b) => (
+                    <div key={b.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted-50/50 transition-colors">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50">
+                        <Cloud className="h-4 w-4 text-blue-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-[#1E293B] truncate">{b.filename}</p>
+                        <p className="text-[11px] text-muted-400 flex items-center gap-1 mt-0.5">
+                          <Clock className="h-3 w-3" />
+                          {new Date(b.created_at).toLocaleString('en-GB', {
+                            day: 'numeric', month: 'short', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit',
+                          })}
+                          &nbsp;·&nbsp;{b.size_mb} MB
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {cloudDeleteId === b.id ? (
+                          <>
+                            <button
+                              onClick={() => setCloudDeleteId(null)}
+                              className="text-xs font-semibold text-muted-600 border border-muted-200 rounded-lg px-2.5 py-1 hover:bg-muted-50"
+                            >Cancel</button>
+                            <button
+                              onClick={() => void handleCloudDelete(b.id)}
+                              className="text-xs font-semibold text-white bg-rose-600 rounded-lg px-2.5 py-1 hover:bg-rose-700"
+                            >Delete</button>
+                          </>
+                        ) : cloudRestoreId === b.id ? (
+                          <>
+                            <span className="text-xs text-muted-500">Download & restore?</span>
+                            <button
+                              onClick={() => setCloudRestoreId(null)}
+                              className="text-xs font-semibold text-muted-600 border border-muted-200 rounded-lg px-2.5 py-1"
+                            >Cancel</button>
+                            <button
+                              onClick={() => void handleCloudRestore(b.id)}
+                              disabled={cloudRestoring}
+                              className="text-xs font-semibold text-white bg-blue-600 rounded-lg px-2.5 py-1 hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {cloudRestoring ? 'Downloading…' : 'Download'}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setCloudRestoreId(b.id)}
+                              title="Download this backup to restore"
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-800 rounded-lg px-2.5 py-1 hover:bg-blue-50 transition-colors"
+                            >
+                              <Download className="h-3.5 w-3.5" /> Restore
+                            </button>
+                            <button
+                              onClick={() => setCloudDeleteId(b.id)}
+                              className="h-7 w-7 flex items-center justify-center rounded-lg text-muted-300 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

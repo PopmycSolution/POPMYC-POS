@@ -12,6 +12,10 @@ from backups.views import (
     BackupExportView,
     BackupImportView,
     BackupDeleteFileView,
+    CloudBackupUploadView,
+    CloudBackupListView,
+    CloudBackupDownloadView,
+    CloudBackupDeleteView,
 )
 
 # NOTE: this urls.py is mounted at api/v1/backups/ in api/urls.py
@@ -28,9 +32,15 @@ urlpatterns = [
     path("status/",              BackupStatusView.as_view(),     name="backup-status"),
     path("validate/",            BackupValidateView.as_view(),   name="backup-validate"),
     path("restore/",             BackupRestoreNewView.as_view(), name="backup-restore"),
-    path("export/",              BackupExportView.as_view(),     name="backup-export"),
-    path("import/",              BackupImportView.as_view(),     name="backup-import"),
-    path("file/<str:filename>/", BackupDeleteFileView.as_view(), name="backup-delete-file"),
+    path("export/",              BackupExportView.as_view(),          name="backup-export"),
+    path("import/",              BackupImportView.as_view(),          name="backup-import"),
+    path("file/<str:filename>/", BackupDeleteFileView.as_view(),      name="backup-delete-file"),
+
+    # ── Cloud backup (disaster recovery) ─────────────────────────────────────
+    path("cloud-upload/",              CloudBackupUploadView.as_view(),   name="cloud-backup-upload"),
+    path("cloud-list/",                CloudBackupListView.as_view(),     name="cloud-backup-list"),
+    path("cloud-download/<str:pk>/",   CloudBackupDownloadView.as_view(), name="cloud-backup-download"),
+    path("cloud-delete/<str:pk>/",     CloudBackupDeleteView.as_view(),   name="cloud-backup-delete"),
 
     # ── Legacy / model-based routes ───────────────────────────────────────────
     path("<uuid:pk>/restore-legacy/", BackupRestoreView.as_view(),  name="backup-restore-legacy"),

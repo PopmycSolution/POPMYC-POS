@@ -188,9 +188,10 @@ export function App() {
   //     leaves it for the next startup on transient failure.
   //   - No effect on normal POS traffic: only contacts CLOUD_LICENSE_URL.
   useEffect(() => {
-    retryPendingCompletion().catch(() => {
-      // Already handled internally — fail completely silently here.
-    });
+    retryPendingCompletion().catch(() => {});
+    // Proactively refresh the JWT access token if it's within 2 hours of expiring.
+    // This prevents mid-session logouts on the rare case the 24h token is about to expire.
+    void silentRefreshToken();
   }, []); // empty deps — run exactly once on mount
 
   return (

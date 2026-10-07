@@ -701,3 +701,242 @@ class BackupDeleteFileView(APIView):
             logger.exception("Failed to delete backup %s", filename)
             return Response({"detail": "Could not delete the backup file."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ── Cloud backup views ────────────────────────────────────────────────────────
+
+class CloudBackupUploadView(APIView):
+    """
+    POST /api/v1/backups/cloud-upload/
+
+    Creates a local backup then uploads it to the Render cloud database.
+    The backup is associated with the current user's business.
+    On a fresh install on a new PC, the customer can restore from this backup.
+
+    Steps:
+      1. Create a fresh local pg_dump backup (reuses BackupCreateView logic)
+      2. Upload the .sql.gz file to the CloudBackup model (stored in media/)
+      3. Return the cloud backup metadata
+
+    Only Admin and Super Admin may upload cloud backups.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not _can_manage_backups(request.user):
+            return Response(
+                {"detail": "Only Admin and Super Admin can upload cloud backups."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = request.user
+        if not user.business_id:
+            return Response(
+                {"detail": "No business associated with your account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Step 1: create a local pg_dump backup
+        backup_dir = _get_backup_dir()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        from django.utils import timezone as _tz
+        ts = _tz.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"cloud_backup_{ts}.sql.gz"
+        filepath = backup_dir / filename
+
+        pg_env = _get_pg_env()
+        pg_env_dict = pg_env
+        db = settings.DATABASES["default"]
+        host  = db.get("HOST", "localhost")
+        port  = str(db.get("PORT", "5432"))
+        dbname = db.get("NAME", "popmyc_pos")
+        user_pg = db.get("USER", "postgres")
+
+        pg_dump = _find_pg_bin("pg_dump")
+        if not pg_dump:
+            return Response(
+                {"detail": "pg_dump not found. Ensure PostgreSQL is installed."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        import subprocess, gzip as _gzip, shutil as _shutil
+        try:
+            # Run pg_dump and pipe through gzip
+            dump_cmd = [
+                pg_dump,
+                "--host", host, "--port", port,
+                "--username", user_pg,
+                "--no-password",
+                "--format=plain",
+                "--blobs",
+                dbname,
+            ]
+            with open(filepath, "wb") as f_out:
+                with _gzip.open(f_out, "wb") as gz:
+                    proc = subprocess.Popen(
+                        dump_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=pg_env_dict,
+                    )
+                    stdout, stderr = proc.communicate(timeout=300)
+                    if proc.returncode != 0:
+                        filepath.unlink(missing_ok=True)
+                        return Response(
+                            {"detail": f"pg_dump failed: {stderr.decode()[:200]}"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        )
+                    gz.write(stdout)
+
+            size = filepath.stat().st_size
+        except Exception as exc:
+            filepath.unlink(missing_ok=True)
+            return Response(
+                {"detail": f"Backup creation failed: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Step 2: upload to CloudBackup model
+        from backups.models import CloudBackup
+        from django.core.files import File
+        try:
+            with open(filepath, "rb") as f:
+                cloud_bk = CloudBackup.objects.create(
+                    business_id=user.business_id,
+                    original_filename=filename,
+                    size_bytes=size,
+                    uploaded_by=user,
+                    notes=request.data.get("notes", ""),
+                )
+                cloud_bk.backup_file.save(filename, File(f), save=True)
+        except Exception as exc:
+            filepath.unlink(missing_ok=True)
+            return Response(
+                {"detail": f"Cloud upload failed: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Clean up local temp file
+        filepath.unlink(missing_ok=True)
+
+        logger.info(
+            "Cloud backup created: %s (%d bytes) by %s",
+            filename, size, user.username,
+        )
+
+        return Response(
+            {
+                "id":        str(cloud_bk.id),
+                "filename":  cloud_bk.original_filename,
+                "size_mb":   round(size / (1024 * 1024), 2),
+                "created_at": cloud_bk.created_at.isoformat(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CloudBackupListView(APIView):
+    """
+    GET /api/v1/backups/cloud-list/
+
+    Lists all cloud backups for the current user's business.
+    Used on a fresh install to offer a restore.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _can_manage_backups(request.user):
+            return Response(
+                {"detail": "Only Admin and Super Admin can list cloud backups."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = request.user
+        if not user.business_id:
+            return Response({"backups": []})
+
+        from backups.models import CloudBackup
+        backups = CloudBackup.objects.filter(
+            business_id=user.business_id
+        ).order_by("-created_at")[:10]  # last 10
+
+        data = [
+            {
+                "id":        str(b.id),
+                "filename":  b.original_filename,
+                "size_mb":   round(b.size_bytes / (1024 * 1024), 2),
+                "created_at": b.created_at.isoformat(),
+                "notes":     b.notes,
+            }
+            for b in backups
+        ]
+        return Response({"backups": data})
+
+
+class CloudBackupDownloadView(APIView):
+    """
+    GET /api/v1/backups/cloud-download/<pk>/
+
+    Downloads a specific cloud backup file.
+    Returns the .sql.gz file as a streaming response.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        if not _can_manage_backups(request.user):
+            return Response(
+                {"detail": "Only Admin and Super Admin can download cloud backups."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from backups.models import CloudBackup
+        from django.http import FileResponse
+        try:
+            import uuid as _uuid
+            bk = CloudBackup.objects.get(
+                pk=_uuid.UUID(str(pk)),
+                business_id=request.user.business_id,
+            )
+        except (CloudBackup.DoesNotExist, ValueError):
+            return Response({"detail": "Cloud backup not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not bk.backup_file or not bk.backup_file.name:
+            return Response({"detail": "Backup file missing."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            resp = FileResponse(
+                bk.backup_file.open("rb"),
+                content_type="application/gzip",
+            )
+            resp["Content-Disposition"] = f'attachment; filename="{bk.original_filename}"'
+            resp["Content-Length"] = bk.size_bytes
+            return resp
+        except Exception as exc:
+            return Response(
+                {"detail": f"Could not serve backup file: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class CloudBackupDeleteView(APIView):
+    """DELETE /api/v1/backups/cloud-delete/<pk>/"""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        if not _can_manage_backups(request.user):
+            return Response({"detail": "Only Admin and Super Admin can delete cloud backups."}, status=403)
+
+        from backups.models import CloudBackup
+        try:
+            import uuid as _uuid
+            bk = CloudBackup.objects.get(pk=_uuid.UUID(str(pk)), business_id=request.user.business_id)
+        except (CloudBackup.DoesNotExist, ValueError):
+            return Response({"detail": "Not found."}, status=404)
+
+        try:
+            bk.backup_file.delete(save=False)
+        except Exception:
+            pass
+        bk.delete()
+        return Response({"detail": "Cloud backup deleted."}, status=204)

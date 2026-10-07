@@ -51,3 +51,42 @@ class Backup(models.Model):
 
     def __str__(self):
         return f"{self.filename} - {self.status}"
+
+
+def cloud_backup_path(instance, filename):
+    """Upload path: cloud_backups/<business_id>/<filename>"""
+    return f"cloud_backups/{instance.business_id}/{filename}"
+
+
+class CloudBackup(models.Model):
+    """
+    A backup file uploaded to the Render cloud for disaster recovery.
+    Each business can have multiple cloud backups.
+    On a fresh PC install, the customer is offered to restore their latest cloud backup.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(
+        "businesses.Business",
+        on_delete=models.CASCADE,
+        related_name="cloud_backups",
+    )
+    backup_file = models.FileField(upload_to=cloud_backup_path)
+    original_filename = models.CharField(max_length=255)
+    size_bytes = models.BigIntegerField(default=0)
+    uploaded_by = models.ForeignKey(
+        "accounts.CustomUser",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="cloud_backups",
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "backups_cloud_backup"
+        ordering = ["-created_at"]
+        verbose_name = "Cloud Backup"
+        verbose_name_plural = "Cloud Backups"
+
+    def __str__(self):
+        return f"{self.original_filename} — {self.business.name if self.business_id else '?'}"
