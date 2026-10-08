@@ -41,6 +41,8 @@ import UpdateToast from '@/components/updater/UpdateToast';
 import PWAInstallPrompt from '@/components/pwa/PWAInstallPrompt';
 import OfflineIndicator from '@/components/pwa/OfflineIndicator';
 import { IS_PWA } from '@/utils/constants';
+import { useInitialCloudSync } from '@/hooks/useInitialCloudSync';
+import InitialSyncToast from '@/components/sync/InitialSyncToast';
 
 // ── Setup guard — checks first-run state once on cold start ───────────────────
 // On PWA mode we skip the setup check entirely: the business owner already has
@@ -110,6 +112,8 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
   const authed = isAuthenticated || !!accessToken || !!user;
 
+  const { status: initialSyncStatus } = useInitialCloudSync(_hasHydrated && authed);
+
   // Register navigate globally so the axios interceptor can redirect without
   // a hard page reload (which would blow away React state).
   useEffect(() => {
@@ -143,7 +147,12 @@ function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <InitialSyncToast status={initialSyncStatus} />
+    </>
+  );
 }
 
 function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
