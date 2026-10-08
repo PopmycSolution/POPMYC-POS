@@ -32,7 +32,7 @@
 ; Service name:      POPMYCBackend
 
 #define AppName       "POPMYC POS"
-#define AppVersion    "1.1.7"
+#define AppVersion    "1.1.8"
 #define AppPublisher  "POPMyC Solutions"
 #define AppExeName    "POPMYC POS.exe"
 #define AppURL        "https://popmycsolutions.com"
