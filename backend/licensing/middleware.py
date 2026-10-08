@@ -45,6 +45,7 @@ BYPASS_PREFIXES = (
     "/api-auth/",
     "/api/v1/setup/",    # pre-auth first-run setup endpoints
     "/api/v1/cloud/",    # cloud endpoints do their own license verification
+    "/api/v1/sync/",     # sync endpoints — also mounted at /api/sync/ (alias)
 )
 
 

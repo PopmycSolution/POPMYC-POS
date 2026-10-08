@@ -22,6 +22,9 @@ urlpatterns = [
     path("api/schema/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path("", include("api.urls")),
     path("api/sync/", include("synchronization.urls")),
+    # Also mount under /api/v1/sync/ so the PWA (which uses API_BASE_URL=/api/v1)
+    # can reach sync endpoints without a separate base URL.
+    path("api/v1/sync/", include("synchronization.urls")),
     path("api/v1/setup/", include("setup.urls")),
     path("api/v1/cloud/", include("cloud.urls", namespace="cloud")),
 ]

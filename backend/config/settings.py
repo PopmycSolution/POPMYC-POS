@@ -26,9 +26,23 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
+# ── Auto-detect Render deployment ──────────────────────────────────────────────
+# On Render, RENDER=true is always set. Use it to inject the right defaults
+# without needing every env var to be set manually in the dashboard.
+_IS_RENDER = os.getenv("RENDER", "").lower() == "true"
+
+if _IS_RENDER:
+    # Render sets RENDER_EXTERNAL_HOSTNAME to the service's public hostname
+    _render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "popmyc-pos.onrender.com")
+    if _render_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_render_host)
+
 # ── CSRF trusted origins (required for Render / any non-localhost deployment) ─
-# Example: CSRF_TRUSTED_ORIGINS=https://popmyc.onrender.com,https://app.popmyc.com
-_csrf_origins_env = os.getenv("CSRF_TRUSTED_ORIGINS", "")
+_csrf_origins_env = os.getenv(
+    "CSRF_TRUSTED_ORIGINS",
+    # Default includes both Render service URLs so PWA works without extra config
+    "https://popmyc-pos.onrender.com,https://popmyc-poos-app.onrender.com" if _IS_RENDER else "",
+)
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_origins_env.split(",") if o.strip()]
 
 INSTALLED_APPS = [
@@ -72,9 +86,10 @@ INSTALLED_APPS = [
 
 # ── Cloud / PWA feature flags ──────────────────────────────────────────────────
 # Both default False so the local POS works with no internet and no cloud config.
-# Set to True in the cloud/production environment only.
-CLOUD_ENABLED = os.getenv("CLOUD_ENABLED", "False") == "True"
-PWA_ENABLED   = os.getenv("PWA_ENABLED",   "False") == "True"
+# On Render (_IS_RENDER=True) they default to True — the whole point of Render
+# is to serve the cloud/PWA backend. Override via env vars if needed.
+CLOUD_ENABLED = os.getenv("CLOUD_ENABLED", "True" if _IS_RENDER else "False") == "True"
+PWA_ENABLED   = os.getenv("PWA_ENABLED",   "True" if _IS_RENDER else "False") == "True"
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
