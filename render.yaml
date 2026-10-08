@@ -4,7 +4,7 @@ services:
   # Once you buy a domain, add it in the Render dashboard under
   # "Custom Domains" and update CORS_ALLOWED_ORIGINS on the backend service.
   - type: web
-    name: popmyc-poos-app
+    name: popmyc-pos-app
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build:pwa
     staticPublishPath: frontend/dist
