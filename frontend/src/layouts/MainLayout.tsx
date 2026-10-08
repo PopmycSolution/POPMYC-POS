@@ -9,6 +9,7 @@ import {
   Sun, Moon, ChevronRight, Zap, KeyRound, Camera, ArrowLeftRight,
   CalendarClock, XCircle, RefreshCw,
 } from 'lucide-react';
+import { IS_PWA, APP_VERSION } from '@/utils/constants';
 import { Avatar } from '@/components/ui/Avatar';
 import { BranchSwitcher } from '@/components/branches/BranchSwitcher';
 import { HelpBot } from '@/components/help/HelpBot';
@@ -544,10 +545,508 @@ function HeaderIconBtn({
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// PWA LAYOUT — renders only when IS_PWA === true
+// ═══════════════════════════════════════════════════════════════════
+function PWALayout() {
+  const [drawerOpen,      setDrawerOpen]      = useState(false);
+  const [profileOpen,     setProfileOpen]     = useState(false);
+  const [changePwdOpen,   setChangePwdOpen]   = useState(false);
+  const [avatarModalOpen, setAvatarModalOpen] = useState(false);
+  const [permTick,        setPermTick]        = useState(0);
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user, logout: storeLogout } = useAuthStore();
+  const setAvatarUrl = useAuthStore((s) => s.setAvatarUrl);
+
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.key === 'popmyc-role-matrix') setPermTick((t) => t + 1);
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Close profile dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const userRole: string = (() => {
+    if (user?.role) return user.role;
+    try {
+      const raw = localStorage.getItem('popmyc-auth-storage');
+      if (raw) {
+        const parsed = JSON.parse(raw) as { state?: { user?: { role?: string } } };
+        if (parsed?.state?.user?.role) return parsed.state.user.role;
+      }
+    } catch { /* noop */ }
+    return 'CASHIER';
+  })();
+
+  const firstName   = user?.firstName ?? 'User';
+  const lastName    = user?.lastName  ?? '';
+  const initials    = `${firstName[0] ?? 'U'}${lastName[0] ?? ''}`.toUpperCase() || 'U';
+  const displayName = `${firstName} ${lastName}`.trim();
+  const avatarUrl   = user?.avatarUrl ?? null;
+
+  const businessName   = useSettingsStore((s) => s.business.name);
+  const posEnabled       = useSettingsStore((s) => s.posEnabled);
+  const inventoryEnabled = useSettingsStore((s) => s.inventoryEnabled);
+  const isSingleBranch   = useSettingsStore((s) => s.isSingleBranch);
+  const roleConfig       = useMemo(() => getRoleConfig(userRole), [userRole, permTick]); // eslint-disable-line
+
+  const navGroups = useMemo(() =>
+    ALL_NAV_GROUPS
+      .map((g) => ({
+        ...g,
+        items: g.items.filter((i) => {
+          if (!canAccess(userRole, i.href)) return false;
+          if (i.mode === 'pos'       && !posEnabled)       return false;
+          if (i.mode === 'inventory' && !inventoryEnabled) return false;
+          if (i.href === '/branches' && isSingleBranch)    return false;
+          if (i.href === '/inventory/transfers' && isSingleBranch) return false;
+          return true;
+        }),
+      }))
+      .filter((g) => g.items.length > 0),
+  [userRole, permTick, posEnabled, inventoryEnabled, isSingleBranch]); // eslint-disable-line
+
+  // Current route for access guard
+  const _rawSegment  = ('/' + location.pathname.split('/')[1]) as AppRoute;
+  const _fullPath    = location.pathname as AppRoute;
+  const currentRoute: AppRoute = (
+    _fullPath === '/inventory/adjustments' ||
+    _fullPath === '/inventory/transfers'
+  ) ? _fullPath : _rawSegment;
+  const routeAllowed =
+    userRole === 'SUPER_ADMIN' || userRole === 'super_admin' || canAccess(userRole, currentRoute);
+
+  const handleLogout = () => {
+    authService.logout();
+    storeLogout();
+    setProfileOpen(false);
+    setDrawerOpen(false);
+    navigate('/login');
+  };
+
+  // Bottom tab definitions
+  const bottomTabs: {
+    key: string;
+    label: string;
+    href?: AppRoute;
+    icon: typeof Home;
+    isFab?: boolean;
+    action?: () => void;
+  }[] = [
+    { key: 'home',     label: 'Home',     href: '/dashboard', icon: Home         },
+    { key: 'pos',      label: 'POS',      href: '/pos',       icon: ShoppingCart, isFab: true },
+    { key: 'products', label: 'Products', href: '/products',  icon: Package      },
+    { key: 'sales',    label: 'Sales',    href: '/sales',     icon: Receipt      },
+    { key: 'more',     label: 'More',     icon: Menu,         action: () => setDrawerOpen(true) },
+  ];
+
+  const visibleTabs = bottomTabs.filter((t) =>
+    t.href ? canAccess(userRole, t.href) : true
+  );
+
+  return (
+    <div className="min-h-screen" style={{ background: '#f0faf8' }}>
+      {/* ── Modals ── */}
+      <ChangePasswordModal open={changePwdOpen} onClose={() => setChangePwdOpen(false)} />
+      <ProfilePictureModal
+        open={avatarModalOpen}
+        onClose={() => {
+          setAvatarModalOpen(false);
+          const token = useAuthStore.getState().accessToken ?? '';
+          if (!token || token.startsWith('local-session-')) return;
+          api.get<Record<string, unknown>>('/accounts/me/', { _skipAuthRedirect: true } as Record<string, unknown>)
+            .then((res) => {
+              const url = (res.data.profile_picture_url as string | null) ?? null;
+              setAvatarUrl(url);
+            })
+            .catch(() => {});
+        }}
+        currentAvatarUrl={avatarUrl}
+        initials={initials}
+      />
+      <ChangePasswordModal
+        open={user?.mustChangePassword === true && !changePwdOpen}
+        onClose={() => {/* forced */}}
+        forced
+      />
+
+      {/* ── Drawer overlay ── */}
+      <div
+        style={{
+          position: 'fixed', inset: 0, zIndex: 40,
+          background: 'rgba(0,0,0,0.55)',
+          backdropFilter: 'blur(4px)',
+          WebkitBackdropFilter: 'blur(4px)',
+          opacity: drawerOpen ? 1 : 0,
+          pointerEvents: drawerOpen ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease',
+        }}
+        onClick={() => setDrawerOpen(false)}
+      />
+
+      {/* ── Left Drawer ── */}
+      <div
+        style={{
+          position: 'fixed', top: 0, left: 0, zIndex: 50,
+          height: '100%', width: 280,
+          background: '#ffffff',
+          display: 'flex', flexDirection: 'column',
+          transform: drawerOpen ? 'translateX(0)' : 'translateX(-100%)',
+          transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
+          boxShadow: '4px 0 24px rgba(0,0,0,0.15)',
+        }}
+      >
+        {/* Drawer header */}
+        <div style={{ background: '#004D40', padding: '20px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div>
+              <p style={{ color: '#ffffff', fontWeight: 700, fontSize: 16, margin: 0 }}>
+                {businessName || 'POPMYC'}
+              </p>
+              <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, margin: '2px 0 0' }}>
+                {displayName}
+              </p>
+            </div>
+            <button
+              onClick={() => setDrawerOpen(false)}
+              style={{
+                background: 'rgba(255,255,255,0.1)',
+                border: 'none', borderRadius: 8,
+                width: 32, height: 32, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#ffffff',
+              }}
+            >
+              <X style={{ width: 18, height: 18 }} />
+            </button>
+          </div>
+          {/* Role badge */}
+          <span style={{
+            display: 'inline-block',
+            background: 'rgba(78,204,163,0.18)',
+            color: '#4ECCA3',
+            border: '1px solid rgba(78,204,163,0.4)',
+            borderRadius: 20,
+            padding: '2px 10px',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+          }}>
+            {roleConfig.label}
+          </span>
+        </div>
+
+        {/* Drawer nav */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
+          {navGroups.map((group) => (
+            <div key={group.id} style={{ marginBottom: 8 }}>
+              {navGroups.length > 1 && (
+                <p style={{
+                  padding: '6px 16px 4px',
+                  fontSize: 10, fontWeight: 800,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.16em',
+                  color: '#004D40',
+                  margin: 0,
+                }}>
+                  {group.label}
+                </p>
+              )}
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = location.pathname === item.href ||
+                  location.pathname.startsWith(item.href + '/');
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => { navigate(item.href); setDrawerOpen(false); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      width: '100%', padding: '10px 16px',
+                      background: isActive ? '#00897B' : 'transparent',
+                      color: isActive ? '#ffffff' : '#374151',
+                      border: 'none', cursor: 'pointer',
+                      fontSize: 14, fontWeight: isActive ? 600 : 400,
+                      borderRadius: 0, textAlign: 'left',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = '#f0faf8';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                    }}
+                  >
+                    <Icon style={{ width: 18, height: 18, flexShrink: 0, opacity: isActive ? 1 : 0.6 }} />
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        {/* Drawer footer */}
+        <div style={{
+          borderTop: '1px solid #e5e7eb',
+          padding: '12px 0 8px',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={() => { setDrawerOpen(false); setAvatarModalOpen(true); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              width: '100%', padding: '10px 16px',
+              background: 'transparent', border: 'none',
+              color: '#374151', fontSize: 14, cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f0faf8'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            <Camera style={{ width: 18, height: 18, flexShrink: 0, opacity: 0.6 }} />
+            Profile Picture
+          </button>
+          <button
+            onClick={() => { setDrawerOpen(false); setChangePwdOpen(true); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              width: '100%', padding: '10px 16px',
+              background: 'transparent', border: 'none',
+              color: '#374151', fontSize: 14, cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f0faf8'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            <KeyRound style={{ width: 18, height: 18, flexShrink: 0, opacity: 0.6 }} />
+            Change Password
+          </button>
+          <button
+            onClick={handleLogout}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              width: '100%', padding: '10px 16px',
+              background: 'transparent', border: 'none',
+              color: '#ef4444', fontSize: 14, cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(239,68,68,0.06)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+          >
+            <LogOut style={{ width: 18, height: 18, flexShrink: 0 }} />
+            Log out
+          </button>
+          <p style={{
+            textAlign: 'center', fontSize: 11,
+            color: '#9ca3af', padding: '8px 16px 4px', margin: 0,
+          }}>
+            v{APP_VERSION}
+          </p>
+        </div>
+      </div>
+
+      {/* ── Fixed top bar ── */}
+      <header style={{
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50,
+        height: 56,
+        background: '#ffffff',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 12px',
+      }}>
+        {/* Hamburger */}
+        <button
+          onClick={() => setDrawerOpen(true)}
+          style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            width: 40, height: 40,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: 10, color: '#004D40',
+          }}
+        >
+          <Menu style={{ width: 22, height: 22 }} />
+        </button>
+
+        {/* Brand */}
+        <span style={{ color: '#004D40', fontWeight: 700, fontSize: 16, letterSpacing: '0.02em' }}>
+          POPMYC POS
+        </span>
+
+        {/* Profile avatar */}
+        <div ref={profileRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setProfileOpen((v) => !v)}
+            style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              width: 40, height: 40,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              borderRadius: '50%', padding: 0,
+            }}
+          >
+            <Avatar size="sm" variant="primary" initials={initials} src={avatarUrl ?? undefined} />
+          </button>
+
+          {/* Profile dropdown */}
+          {profileOpen && (
+            <div style={{
+              position: 'absolute', top: '110%', right: 0,
+              background: '#ffffff', borderRadius: 12,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.14)',
+              border: '1px solid #e5e7eb',
+              minWidth: 200, zIndex: 60,
+              overflow: 'hidden',
+            }}>
+              {/* User info */}
+              <div style={{ padding: '14px 16px', borderBottom: '1px solid #f3f4f6' }}>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#111827' }}>{displayName}</p>
+                <span style={{
+                  display: 'inline-block', marginTop: 4,
+                  background: 'rgba(78,204,163,0.15)',
+                  color: '#00897B',
+                  border: '1px solid rgba(78,204,163,0.3)',
+                  borderRadius: 20, padding: '2px 8px',
+                  fontSize: 11, fontWeight: 700,
+                }}>
+                  {roleConfig.label}
+                </span>
+              </div>
+              {/* Actions */}
+              {[
+                { label: 'Profile Picture', icon: Camera,   action: () => { setProfileOpen(false); setAvatarModalOpen(true); } },
+                { label: 'Change Password', icon: KeyRound, action: () => { setProfileOpen(false); setChangePwdOpen(true); } },
+              ].map(({ label, icon: Icon, action }) => (
+                <button
+                  key={label}
+                  onClick={action}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    width: '100%', padding: '10px 16px',
+                    background: 'transparent', border: 'none',
+                    color: '#374151', fontSize: 14, cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f0faf8'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                >
+                  <Icon style={{ width: 16, height: 16, opacity: 0.6, flexShrink: 0 }} />
+                  {label}
+                </button>
+              ))}
+              <div style={{ borderTop: '1px solid #f3f4f6' }}>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    width: '100%', padding: '10px 16px',
+                    background: 'transparent', border: 'none',
+                    color: '#ef4444', fontSize: 14, cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(239,68,68,0.06)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                >
+                  <LogOut style={{ width: 16, height: 16, flexShrink: 0 }} />
+                  Log out
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </header>
+
+      {/* License banner just below top bar */}
+      <div style={{ position: 'fixed', top: 56, left: 0, right: 0, zIndex: 49 }}>
+        <LicenseExpiryBanner />
+      </div>
+
+      {/* ── Main content ── */}
+      <main style={{ paddingTop: 56, paddingBottom: 80, minHeight: '100vh' }}>
+        {(!user || routeAllowed) ? <Outlet /> : <AccessDenied roleName={roleConfig.label} />}
+      </main>
+
+      {/* ── Bottom tab bar ── */}
+      <nav style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 50,
+        height: 64, paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        background: '#ffffff',
+        boxShadow: '0 -1px 3px rgba(0,0,0,0.08)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-around',
+      }}>
+        {visibleTabs.map((tab) => {
+          const Icon  = tab.icon;
+          const isActive = tab.href
+            ? location.pathname === tab.href || location.pathname.startsWith(tab.href + '/')
+            : false;
+
+          if (tab.isFab) {
+            return (
+              <button
+                key={tab.key}
+                onClick={() => tab.href && navigate(tab.href)}
+                style={{
+                  background: '#00897B',
+                  border: 'none', cursor: 'pointer',
+                  width: 52, height: 52, borderRadius: '50%',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transform: 'translateY(-16px)',
+                  boxShadow: '0 4px 16px rgba(0,137,123,0.45)',
+                  flexShrink: 0,
+                }}
+                aria-label={tab.label}
+              >
+                <Icon style={{ width: 24, height: 24, color: '#ffffff' }} />
+              </button>
+            );
+          }
+
+          return (
+            <button
+              key={tab.key}
+              onClick={() => tab.action ? tab.action() : (tab.href && navigate(tab.href))}
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                gap: 2, flex: 1, height: '100%',
+                color: isActive ? '#00897B' : '#9ca3af',
+              }}
+              aria-label={tab.label}
+            >
+              <Icon style={{ width: 22, height: 22 }} />
+              <span style={{ fontSize: 10, fontWeight: isActive ? 600 : 400, lineHeight: 1.2 }}>
+                {tab.label}
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main layout
 // ─────────────────────────────────────────────────────────────────────────────
 export function MainLayout() {
+  if (IS_PWA) return <PWALayout />;
+
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
   const [userMenuOpen,  setUserMenuOpen]  = useState(false);
   const [notifOpen,     setNotifOpen]     = useState(false);
