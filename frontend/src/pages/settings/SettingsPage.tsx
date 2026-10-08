@@ -1632,6 +1632,9 @@ export default function SettingsPage() {
                   </p>
                 </div>
               )}
+
+              {/* Cloud Sync card — desktop only */}
+              {updater.isDesktop && <CloudSyncCard />}
             </div>
           )}
 
@@ -1646,6 +1649,65 @@ export default function SettingsPage() {
 
 type BackupFile = { filename: string; size_mb: number; created_at: string; size_bytes: number };
 type RestoreStep = 'idle' | 'confirm' | 'working' | 'done' | 'failed';
+
+// ── CloudSyncCard — lets the user re-trigger the initial cloud sync ───────────
+function CloudSyncCard() {
+  const [status, setStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState('');
+
+  async function handleSync() {
+    setStatus('syncing');
+    setMessage('');
+    try {
+      // Clear the done flag so runInitialCloudSync will run again
+      localStorage.removeItem('popmyc-cloud-initial-sync-done');
+      const { runInitialCloudSync } = await import('@/services/initialSync.service');
+      const count = await runInitialCloudSync();
+      if (count > 0) {
+        setStatus('done');
+        setMessage(`${count} records synced to cloud successfully.`);
+      } else {
+        setStatus('done');
+        setMessage('Cloud is already up to date.');
+      }
+    } catch {
+      setStatus('error');
+      setMessage('Sync failed. Check your internet connection and try again.');
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.06)] border border-muted-100 overflow-hidden">
+      <div className="px-5 py-4 border-b border-muted-100 flex items-center gap-2">
+        <RefreshCw className="h-5 w-5 text-muted-400" />
+        <h2 className="text-sm font-bold text-[#1E293B]">Cloud Sync</h2>
+      </div>
+      <div className="p-5 space-y-3">
+        <p className="text-sm text-muted-500">
+          Push all your local data (products, customers, suppliers) to the cloud
+          so it appears on the PWA. Run this if the PWA is showing empty data.
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void handleSync()}
+            disabled={status === 'syncing'}
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50"
+            style={{ background: '#00897B' }}
+          >
+            {status === 'syncing'
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Syncing…</>
+              : <><RefreshCw className="h-4 w-4" /> Sync to Cloud</>}
+          </button>
+          {message && (
+            <p className={`text-xs font-medium ${status === 'error' ? 'text-red-500' : 'text-emerald-600'}`}>
+              {message}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function BackupSection() {
   const [backups, setBackups]       = useState<BackupFile[]>([]);

@@ -7,12 +7,10 @@ export const API_BASE_URL: string =
 
 /**
  * True when running as a PWA (web deployment) rather than the Electron desktop app.
- * Used to hide Electron-only features (update notifications, service management, etc.)
+ * Detected exclusively via the VITE_IS_PWA build-time env var set in .env.pwa.
+ * Never rely on window location or popmycDesktop — both are unreliable.
  */
-export const IS_PWA: boolean =
-  !!(import.meta.env.VITE_IS_PWA as string) ||
-  // Also detect by checking if we're NOT in Electron
-  (typeof window !== 'undefined' && !('popmycDesktop' in window) && !window.location.href.startsWith('http://127.0.0.1'));
+export const IS_PWA: boolean = !!(import.meta.env.VITE_IS_PWA as string);
 
 /**
  * Cloud backend URL.
