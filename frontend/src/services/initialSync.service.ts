@@ -12,8 +12,10 @@
  */
 
 import { uploadBatch, registerDevice, isLocalSession } from './sync.service';
+import api from './api';
 import { useSyncStore } from '@/stores/sync.store';
 import { useAuthStore } from '@/stores/auth.store';
+import { useSettingsStore } from '@/stores/settings.store';
 import { useProductStore } from '@/stores/product.store';
 import { useCategoryStore } from '@/stores/category.store';
 import { useBrandStore } from '@/stores/brand.store';
@@ -28,6 +30,21 @@ import type { SyncQueueItem } from '@/stores/sync.store';
 const FLAG_KEY = 'popmyc-cloud-initial-sync-done';
 const BATCH_SIZE = 25;
 const LOG_PREFIX = '[POPMYC initial-sync]';
+
+// ── Settings helper (reads from settings store for business registration) ─────
+function useSettingsStoreForSync() {
+  const s = useSettingsStore.getState();
+  return {
+    businessName:     s.business.name,
+    businessCategory: s.business.businessCategory,
+    address:          s.business.address,
+    phone:            s.business.phone,
+    email:            s.business.email,
+    currency:         s.business.currency,
+    currencySymbol:   s.business.currencySymbol,
+    branchName:       (s as unknown as Record<string, unknown>).activeBranchName as string | undefined,
+  };
+}
 
 // ── Public helpers ────────────────────────────────────────────────────────────
 
@@ -130,6 +147,36 @@ export async function runInitialCloudSync(): Promise<number> {
 
   const { businessId, branchId } = getAuthContext();
   const deviceId = useSyncStore.getState().deviceId;
+
+  // ── Step 0: Register the business on the cloud ────────────────────────────
+  // This ensures the Business, Branch, and admin user exist on Render before
+  // we push products/customers. Idempotent — safe to call multiple times.
+  try {
+    const settings = useSettingsStoreForSync();
+    if (settings.businessName && businessId) {
+      await api.post('/cloud/trial/register-business/', {
+        business_id:       businessId,
+        name:              settings.businessName,
+        business_category: settings.businessCategory ?? 'GENERAL_RETAIL',
+        address:           settings.address ?? '',
+        phone:             settings.phone ?? '',
+        email:             settings.email ?? '',
+        currency:          settings.currency ?? 'GHS',
+        currency_symbol:   settings.currencySymbol ?? 'GH₵',
+        branch_id:         branchId ?? undefined,
+        branch_name:       settings.branchName ?? 'Main Branch',
+        branch_code:       'HQ',
+        admin_username:    useAuthStore.getState().user?.email ?? '',
+        admin_email:       useAuthStore.getState().user?.email ?? '',
+        admin_first_name:  useAuthStore.getState().user?.firstName ?? '',
+        admin_last_name:   useAuthStore.getState().user?.lastName ?? '',
+      });
+      console.info(LOG_PREFIX, 'business registered on cloud');
+    }
+  } catch {
+    // Non-fatal — business may already exist (409) or cloud may be down
+    // Products/customers sync will still work if business already exists
+  }
 
   // Register device before first batch (same pattern as useSync.ts)
   try {
