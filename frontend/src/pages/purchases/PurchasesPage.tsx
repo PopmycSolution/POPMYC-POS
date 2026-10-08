@@ -593,6 +593,12 @@ export default function PurchasesPage() {
         }),
       };
       syncFromApi(updated as unknown as Record<string, unknown>);
+      // Update local product stock for each received item
+      for (const item of itemsToSend) {
+        if (item.productId && item.qtyToReceive > 0) {
+          useProductStore.getState().incrementStock(item.productId, item.qtyToReceive, activeBranchId ?? undefined);
+        }
+      }
       setReceiveModalOpen(false);
       if (selectedOrder?.id === receiveTargetOrder.id) setSelectedOrder(updated);
       setReceiveSaving(false); return;
@@ -626,6 +632,13 @@ export default function PurchasesPage() {
       });
       // Re-fetch the updated PO to get batch tracking data
       await fetchOrders();
+      // Update local product stock immediately, then sync from backend for authoritative data
+      for (const item of itemsToSend) {
+        if (item.productId && item.qtyToReceive > 0) {
+          useProductStore.getState().incrementStock(item.productId, item.qtyToReceive, activeBranchId ?? undefined);
+        }
+      }
+      void useProductStore.getState().syncFromBackend();
       setReceiveModalOpen(false);
       closeDetail();
     } catch (err: unknown) {
