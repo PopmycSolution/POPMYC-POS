@@ -554,7 +554,19 @@ function PWALayout() {
   const [changePwdOpen,   setChangePwdOpen]   = useState(false);
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
   const [permTick,        setPermTick]        = useState(0);
+  const [bannerHeight, setBannerHeight] = useState(0);
+  const bannerRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
+
+  // Measure the license banner height so content isn't hidden behind it
+  useEffect(() => {
+    const el = bannerRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(() => setBannerHeight(el.offsetHeight));
+    obs.observe(el);
+    setBannerHeight(el.offsetHeight);
+    return () => obs.disconnect();
+  }, []);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -598,7 +610,31 @@ function PWALayout() {
   const displayName = `${firstName} ${lastName}`.trim();
   const avatarUrl   = user?.avatarUrl ?? null;
 
-  const businessName   = useSettingsStore((s) => s.business.name);
+  const { branches, activeBranchId, setActiveBranch } = useBranchStore();
+  const userRecords = useUserStore((s) => s.users);
+
+  // Branch auto-assignment — same logic as the desktop layout
+  useEffect(() => {
+    if (!user) return;
+    const role = user.role ?? 'CASHIER';
+    if (role === 'SUPER_ADMIN') return;
+    const resolve = (val: string | null | undefined): string | null => {
+      if (!val) return null;
+      const byId   = branches.find((b) => b.id   === val);
+      if (byId)   return byId.id;
+      const byName = branches.find((b) => b.name.toLowerCase() === val.toLowerCase());
+      return byName?.id ?? null;
+    };
+    let branchId = resolve(user.branch);
+    if (!branchId) {
+      const record = userRecords.find((u) => u.email === user.email || u.id === user.id);
+      branchId = resolve(record?.branch);
+    }
+    if (branchId && activeBranchId !== branchId) setActiveBranch(branchId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role, user?.branch, user?.email, user?.id, branches.length, userRecords.length]);
+
+  const businessName     = useSettingsStore((s) => s.business.name);
   const posEnabled       = useSettingsStore((s) => s.posEnabled);
   const inventoryEnabled = useSettingsStore((s) => s.inventoryEnabled);
   const isSingleBranch   = useSettingsStore((s) => s.isSingleBranch);
@@ -648,7 +684,8 @@ function PWALayout() {
     action?: () => void;
   }[] = [
     { key: 'home',     label: 'Home',     href: '/dashboard', icon: Home         },
-    { key: 'pos',      label: 'POS',      href: '/pos',       icon: ShoppingCart, isFab: true },
+    // POS FAB only shown when posEnabled — hide for inventory-only businesses
+    ...(posEnabled ? [{ key: 'pos', label: 'POS', href: '/pos' as AppRoute, icon: ShoppingCart, isFab: true }] : []),
     { key: 'products', label: 'Products', href: '/products',  icon: Package      },
     { key: 'sales',    label: 'Sales',    href: '/sales',     icon: Receipt      },
     { key: 'more',     label: 'More',     icon: Menu,         action: () => setDrawerOpen(true) },
@@ -972,12 +1009,12 @@ function PWALayout() {
       </header>
 
       {/* License banner just below top bar */}
-      <div style={{ position: 'fixed', top: 56, left: 0, right: 0, zIndex: 49 }}>
+      <div ref={bannerRef} style={{ position: 'fixed', top: 56, left: 0, right: 0, zIndex: 49 }}>
         <LicenseExpiryBanner />
       </div>
 
       {/* ── Main content ── */}
-      <main style={{ paddingTop: 56, paddingBottom: 80, minHeight: '100vh' }}>
+      <main style={{ paddingTop: 56 + bannerHeight, paddingBottom: 80, minHeight: '100vh' }}>
         {(!user || routeAllowed) ? <Outlet /> : <AccessDenied roleName={roleConfig.label} />}
       </main>
 
