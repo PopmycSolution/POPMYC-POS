@@ -59,7 +59,7 @@ const inputClass = 'w-full h-10 px-3 rounded-xl bg-white border border-muted-200
 
 // Version is read dynamically from Electron (desktop) or falls back to the
 // build-time constant. This ensures the About section always matches reality.
-const FALLBACK_VERSION = '1.1.2';  // updated each release
+const FALLBACK_VERSION = '1.1.4';  // updated each release — matches package.json version
 
 export default function SystemSettingsPage() {
   const [config,  setConfig]  = useState<SystemConfig>(loadConfig);
