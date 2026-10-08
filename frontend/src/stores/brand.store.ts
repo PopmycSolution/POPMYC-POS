@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSyncStore } from './sync.store';
 
 export interface BrandRecord {
   id: string;
@@ -45,6 +46,14 @@ function persist(brands: BrandRecord[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(brands));
 }
 
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
+
 export const useBrandStore = create<BrandStore>((set) => ({
   brands: loadState(),
 
@@ -60,6 +69,15 @@ export const useBrandStore = create<BrandStore>((set) => ({
       persist(next);
       return { brands: next };
     });
+    useSyncStore.getState().enqueue({
+      offlineUuid: newBrand.id,
+      appLabel: 'products',
+      modelName: 'brand',
+      action: 'create',
+      payload: newBrand as unknown as Record<string, unknown>,
+      ...getAuthContext(),
+      version: 1,
+    });
     return newBrand;
   },
 
@@ -69,6 +87,18 @@ export const useBrandStore = create<BrandStore>((set) => ({
       persist(next);
       return { brands: next };
     });
+    const updated = useBrandStore.getState().brands.find((b) => b.id === id);
+    if (updated) {
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'products',
+        modelName: 'brand',
+        action: 'update',
+        payload: updated as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: Date.now(),
+      });
+    }
   },
 
   deleteBrand: (id) => {
@@ -76,6 +106,15 @@ export const useBrandStore = create<BrandStore>((set) => ({
       const next = state.brands.filter((b) => b.id !== id);
       persist(next);
       return { brands: next };
+    });
+    useSyncStore.getState().enqueue({
+      offlineUuid: id,
+      appLabel: 'products',
+      modelName: 'brand',
+      action: 'delete',
+      payload: { id },
+      ...getAuthContext(),
+      version: Date.now(),
     });
   },
 }));

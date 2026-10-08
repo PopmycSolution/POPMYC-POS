@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Add outbox enqueue calls to all six domain stores (products, categories, brands, units, customers, suppliers) and add the three missing models to the backend SYNC_ENTITY_ALLOWLIST. This is the upload side of the sync engine — every local create/update/delete will now be queued and uploaded to Render on the next sync cycle.",
+  "status": "completed",
+  "steps": [
+    "1. Backend: open c:\\xampp\\htdocs\\POS\\backend\\synchronization\\model_applier.py. In SYNC_ENTITY_ALLOWLIST frozenset, add three new entries: (\"products\", \"category\"), (\"products\", \"brand\"), (\"products\", \"unitofmeasure\"). Customers (\"customers\", \"customer\") and suppliers (\"suppliers\", \"supplier\") are already present in the allowlist — confirm but do not duplicate.",
+    "2. Frontend: add helper function getAuthContext() to each store file. The function reads 'popmyc-auth-storage' from localStorage and returns { businessId, branchId }. This is the same pattern already used in useSync.ts lines 75-80. Add it as a module-level function (not inside the store factory) to each of: product.store.ts, category.store.ts, brand.store.ts, unit.store.ts, customer.store.ts, supplier.store.ts.",
+    "3. product.store.ts: Add 'import { useSyncStore } from \"./sync.store\";' at top. In addProduct method, after localStorage.setItem and before the final 'return newProduct', call useSyncStore.getState().enqueue({ offlineUuid: newProduct.id, appLabel: 'products', modelName: 'product', action: 'create', payload: newProduct as unknown as Record<string, unknown>, ...getAuthContext(), version: 1 }). In updateProduct, after the set() call, find the updated product from next array and enqueue with action: 'update', version: Date.now(). In deleteProduct, after the set() call, enqueue with action: 'delete', payload: { id }, version: Date.now().",
+    "4. category.store.ts: Same import. In addCategory, after persist(next) before return, enqueue with appLabel: 'products', modelName: 'category', action: 'create', version: 1. In deleteCategory, after persist(next), enqueue with action: 'delete', payload: { id }, version: Date.now(). Note: category store has no updateCategory method — skip update step.",
+    "5. brand.store.ts: Same import. In addBrand, after persist(next) before return, enqueue with appLabel: 'products', modelName: 'brand', action: 'create', version: 1. In updateBrand, after persist(next), enqueue with action: 'update', version: Date.now(). In deleteBrand, after persist(next), enqueue with action: 'delete', payload: { id }, version: Date.now().",
+    "6. unit.store.ts: Same import. In addUnit, after persist(next) before return, enqueue with appLabel: 'products', modelName: 'unitofmeasure', action: 'create', version: 1. In updateUnit, after persist(next), enqueue with action: 'update', version: Date.now(). In deleteUnit, after persist(next), enqueue with action: 'delete', payload: { id }, version: Date.now().",
+    "7. customer.store.ts: Same import. In addCustomer, after persist({ customers: next }) before return, enqueue with appLabel: 'customers', modelName: 'customer', action: 'create', version: 1. In updateCustomer, after persist(), find updated record, enqueue with action: 'update', version: Date.now(). In deleteCustomer, after persist(), enqueue with action: 'delete', payload: { id }, version: Date.now().",
+    "8. supplier.store.ts: Read the full store file first to locate the exact persist() call sites in addSupplier, updateSupplier, deleteSupplier. Add import and enqueue calls after each persist() call: appLabel: 'suppliers', modelName: 'supplier', create/update/delete pattern same as customers.",
+    "9. Commit all changes: git add frontend/src/stores/product.store.ts frontend/src/stores/category.store.ts frontend/src/stores/brand.store.ts frontend/src/stores/unit.store.ts frontend/src/stores/customer.store.ts frontend/src/stores/supplier.store.ts backend/synchronization/model_applier.py && git commit -m 'feat: enqueue products/categories/brands/units/customers/suppliers to sync outbox'"
+  ],
+  "acceptance_criteria": [
+    "Running 'npm run build' in c:\\xampp\\htdocs\\POS\\frontend produces no TypeScript errors",
+    "Running 'python manage.py test synchronization' in c:\\xampp\\htdocs\\POS\\backend passes",
+    "Adding a product in ProductsPage causes a new entry in localStorage popmyc-sync-store.queue with appLabel='products', modelName='product', action='create', status='pending'",
+    "Adding a category in CategoriesPage causes a new entry with appLabel='products', modelName='category', action='create', status='pending'",
+    "Adding a brand in BrandsPage causes a new entry with appLabel='products', modelName='brand', action='create', status='pending'",
+    "Adding/editing a unit in UnitsPage causes new entries with appLabel='products', modelName='unitofmeasure', status='pending'",
+    "Adding a customer in CustomersPage causes a new entry with appLabel='customers', modelName='customer', status='pending'",
+    "Adding a supplier in SuppliersPage causes a new entry with appLabel='suppliers', modelName='supplier', status='pending'",
+    "SYNC_ENTITY_ALLOWLIST in model_applier.py contains ('products', 'category'), ('products', 'brand'), ('products', 'unitofmeasure')"
+  ],
+  "verification": [
+    "cd c:\\xampp\\htdocs\\POS\\frontend && npm run build — must complete with 0 errors",
+    "cd c:\\xampp\\htdocs\\POS\\backend && python manage.py test synchronization — must pass",
+    "Manual browser test: in Chrome DevTools Application > Local Storage > http://localhost:5173 (or the Render URL), after adding a product, inspect 'popmyc-sync-store' key and confirm queue has a new item with status='pending', appLabel='products', modelName='product'"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

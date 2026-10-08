@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSyncStore } from './sync.store';
 
 export interface UnitRecord {
   id: string;
@@ -63,6 +64,14 @@ function persist(units: UnitRecord[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(units));
 }
 
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
+
 export const useUnitStore = create<UnitStore>((set) => ({
   units: loadState(),
 
@@ -73,6 +82,15 @@ export const useUnitStore = create<UnitStore>((set) => ({
       persist(next);
       return { units: next };
     });
+    useSyncStore.getState().enqueue({
+      offlineUuid: newUnit.id,
+      appLabel: 'products',
+      modelName: 'unitofmeasure',
+      action: 'create',
+      payload: newUnit as unknown as Record<string, unknown>,
+      ...getAuthContext(),
+      version: 1,
+    });
     return newUnit;
   },
 
@@ -82,6 +100,18 @@ export const useUnitStore = create<UnitStore>((set) => ({
       persist(next);
       return { units: next };
     });
+    const updated = useUnitStore.getState().units.find((u) => u.id === id);
+    if (updated) {
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'products',
+        modelName: 'unitofmeasure',
+        action: 'update',
+        payload: updated as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: Date.now(),
+      });
+    }
   },
 
   deleteUnit: (id) => {
@@ -89,6 +119,15 @@ export const useUnitStore = create<UnitStore>((set) => ({
       const next = state.units.filter((u) => u.id !== id);
       persist(next);
       return { units: next };
+    });
+    useSyncStore.getState().enqueue({
+      offlineUuid: id,
+      appLabel: 'products',
+      modelName: 'unitofmeasure',
+      action: 'delete',
+      payload: { id },
+      ...getAuthContext(),
+      version: Date.now(),
     });
   },
 }));

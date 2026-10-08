@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSyncStore } from './sync.store';
 
 export interface CategoryRecord {
   id: string;
@@ -247,6 +248,14 @@ function persist(categories: CategoryRecord[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(categories));
 }
 
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
+
 // Read business category from settings store's localStorage directly to avoid
 // circular deps. Prefers the new businessCategory enum key; falls back to the
 // legacy business.type string so old persisted data still works.
@@ -285,6 +294,15 @@ export const useCategoryStore = create<CategoryStore>((set) => {
         persist(next);
         return { categories: next };
       });
+      useSyncStore.getState().enqueue({
+        offlineUuid: newCat.id,
+        appLabel: 'products',
+        modelName: 'category',
+        action: 'create',
+        payload: newCat as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: 1,
+      });
       return newCat;
     },
 
@@ -293,6 +311,15 @@ export const useCategoryStore = create<CategoryStore>((set) => {
         const next = state.categories.filter((c) => c.id !== id);
         persist(next);
         return { categories: next };
+      });
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'products',
+        modelName: 'category',
+        action: 'delete',
+        payload: { id },
+        ...getAuthContext(),
+        version: Date.now(),
       });
     },
 

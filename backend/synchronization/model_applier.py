@@ -64,6 +64,9 @@ SYNC_ENTITY_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("products",     "productvariant"),
     ("products",     "batch"),
     ("products",     "productstocklevel"),
+    ("products",     "category"),
+    ("products",     "brand"),
+    ("products",     "unitofmeasure"),
     # Customers
     ("customers",    "customer"),
     # Suppliers

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSyncStore } from './sync.store';
 
 export interface CustomerRecord {
   id: string;
@@ -68,6 +69,14 @@ function persist(state: StoredState) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
+
 export const useCustomerStore = create<CustomerStore>((set) => {
   const initial = loadState();
   return {
@@ -88,6 +97,15 @@ export const useCustomerStore = create<CustomerStore>((set) => {
         persist({ customers: next });
         return { customers: next };
       });
+      useSyncStore.getState().enqueue({
+        offlineUuid: newCustomer.id,
+        appLabel: 'customers',
+        modelName: 'customer',
+        action: 'create',
+        payload: newCustomer as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: 1,
+      });
       return newCustomer;
     },
 
@@ -97,6 +115,18 @@ export const useCustomerStore = create<CustomerStore>((set) => {
         persist({ customers: next });
         return { customers: next };
       });
+      const updated = useCustomerStore.getState().customers.find((c) => c.id === id);
+      if (updated) {
+        useSyncStore.getState().enqueue({
+          offlineUuid: id,
+          appLabel: 'customers',
+          modelName: 'customer',
+          action: 'update',
+          payload: updated as unknown as Record<string, unknown>,
+          ...getAuthContext(),
+          version: Date.now(),
+        });
+      }
     },
 
     deleteCustomer: (id) => {
@@ -104,6 +134,15 @@ export const useCustomerStore = create<CustomerStore>((set) => {
         const next = state.customers.filter((c) => c.id !== id);
         persist({ customers: next });
         return { customers: next };
+      });
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'customers',
+        modelName: 'customer',
+        action: 'delete',
+        payload: { id },
+        ...getAuthContext(),
+        version: Date.now(),
       });
     },
   };

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useSyncStore } from './sync.store';
 
 export type SupplierType = 'MANUFACTURER' | 'DISTRIBUTOR' | 'WHOLESALER' | 'IMPORTER' | 'LOCAL';
 export type TransactionType = 'INVOICE' | 'PAYMENT' | 'CREDIT_NOTE' | 'DEBIT_NOTE' | 'REFUND';
@@ -127,6 +128,14 @@ function persist(state: StoredState) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
+
 export const useSupplierStore = create<SupplierStore>((set) => {
   const initial = loadState();
   return {
@@ -147,6 +156,15 @@ export const useSupplierStore = create<SupplierStore>((set) => {
         persist({ suppliers: next, transactions: state.transactions });
         return { suppliers: next };
       });
+      useSyncStore.getState().enqueue({
+        offlineUuid: newSupplier.id,
+        appLabel: 'suppliers',
+        modelName: 'supplier',
+        action: 'create',
+        payload: newSupplier as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: 1,
+      });
       return newSupplier;
     },
 
@@ -156,6 +174,18 @@ export const useSupplierStore = create<SupplierStore>((set) => {
         persist({ suppliers: next, transactions: state.transactions });
         return { suppliers: next };
       });
+      const updated = useSupplierStore.getState().suppliers.find((s) => s.id === id);
+      if (updated) {
+        useSyncStore.getState().enqueue({
+          offlineUuid: id,
+          appLabel: 'suppliers',
+          modelName: 'supplier',
+          action: 'update',
+          payload: updated as unknown as Record<string, unknown>,
+          ...getAuthContext(),
+          version: Date.now(),
+        });
+      }
     },
 
     deleteSupplier: (id) => {
@@ -165,6 +195,15 @@ export const useSupplierStore = create<SupplierStore>((set) => {
         const nextTransactions = state.transactions.filter((t) => t.supplierId !== id);
         persist({ suppliers: nextSuppliers, transactions: nextTransactions });
         return { suppliers: nextSuppliers, transactions: nextTransactions };
+      });
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'suppliers',
+        modelName: 'supplier',
+        action: 'delete',
+        payload: { id },
+        ...getAuthContext(),
+        version: Date.now(),
       });
     },
 

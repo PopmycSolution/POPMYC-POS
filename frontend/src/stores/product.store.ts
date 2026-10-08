@@ -1,7 +1,16 @@
 import { create } from 'zustand';
 import type { Product } from '@/types';
 import { useBranchInventoryStore } from './branchInventory.store';
+import { useSyncStore } from './sync.store';
 import api from '@/services/api';
+
+function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  try {
+    const stored = localStorage.getItem('popmyc-auth-storage');
+    const auth = stored ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state : undefined;
+    return { businessId: auth?.user?.business ?? null, branchId: auth?.user?.branch ?? null };
+  } catch { return { businessId: null, branchId: null }; }
+}
 
 function genId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -84,6 +93,15 @@ export const useProductStore = create<ProductStore>((set, get) => ({
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
         return { products: next };
       });
+      useSyncStore.getState().enqueue({
+        offlineUuid: merged.id,
+        appLabel: 'products',
+        modelName: 'product',
+        action: 'update',
+        payload: merged as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: Date.now(),
+      });
       return merged;
     }
 
@@ -99,6 +117,15 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       return { products: next };
     });
+    useSyncStore.getState().enqueue({
+      offlineUuid: newProduct.id,
+      appLabel: 'products',
+      modelName: 'product',
+      action: 'create',
+      payload: newProduct as unknown as Record<string, unknown>,
+      ...getAuthContext(),
+      version: 1,
+    });
     return newProduct;
   },
 
@@ -111,6 +138,18 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       return { products: next };
     });
+    const updated = get().products.find((p) => p.id === id);
+    if (updated) {
+      useSyncStore.getState().enqueue({
+        offlineUuid: id,
+        appLabel: 'products',
+        modelName: 'product',
+        action: 'update',
+        payload: updated as unknown as Record<string, unknown>,
+        ...getAuthContext(),
+        version: Date.now(),
+      });
+    }
   },
 
   deleteProduct: (id) => {
@@ -118,6 +157,15 @@ export const useProductStore = create<ProductStore>((set, get) => ({
       const next = state.products.filter((p) => p.id !== id);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       return { products: next };
+    });
+    useSyncStore.getState().enqueue({
+      offlineUuid: id,
+      appLabel: 'products',
+      modelName: 'product',
+      action: 'delete',
+      payload: { id },
+      ...getAuthContext(),
+      version: Date.now(),
     });
   },
 
