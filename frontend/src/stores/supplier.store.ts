@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useSyncStore } from './sync.store';
+import api from '@/services/api';
 
 export type SupplierType = 'MANUFACTURER' | 'DISTRIBUTOR' | 'WHOLESALER' | 'IMPORTER' | 'LOCAL';
 export type TransactionType = 'INVOICE' | 'PAYMENT' | 'CREDIT_NOTE' | 'DEBIT_NOTE' | 'REFUND';
@@ -90,6 +91,7 @@ export interface SupplierStore {
   syncSuppliersFromApi: (records: SupplierRecord[]) => void;
   /** Merge/replace transactions for a specific supplier from API response */
   syncTransactionsFromApi: (supplierId: string, records: SupplierTransaction[]) => void;
+  syncFromBackend: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'popmyc-suppliers';
@@ -248,6 +250,67 @@ export const useSupplierStore = create<SupplierStore>((set) => {
         persist({ suppliers: state.suppliers, transactions: merged });
         return { transactions: merged };
       });
+    },
+
+    syncFromBackend: async () => {
+      try {
+        interface BackendSupplier {
+          id: string;
+          name: string;
+          code: string;
+          supplier_type: SupplierType;
+          contact_person: string;
+          phone: string;
+          email: string;
+          address: string;
+          city: string;
+          country: string;
+          tin: string;
+          credit_limit: number;
+          credit_days: number;
+          total_purchases: number;
+          total_paid: number;
+          balance: number;
+          is_active?: boolean;
+          branch_id?: string | null;
+          created_at?: string;
+        }
+        const res = await api.get<{ results?: BackendSupplier[] } | BackendSupplier[]>('/suppliers/?limit=500');
+        const raw: BackendSupplier[] = Array.isArray(res.data)
+          ? res.data
+          : (res.data.results ?? []);
+
+        const now = new Date().toISOString();
+        const backendRecords: SupplierRecord[] = raw.map((b) => ({
+          id: b.id,
+          name: b.name,
+          code: b.code ?? '',
+          supplierType: b.supplier_type ?? 'LOCAL',
+          contactPerson: b.contact_person ?? '',
+          phone: b.phone ?? '',
+          email: b.email ?? '',
+          address: b.address ?? '',
+          city: b.city ?? '',
+          country: b.country ?? '',
+          tin: b.tin ?? '',
+          creditLimit: b.credit_limit ?? 0,
+          creditDays: b.credit_days ?? 0,
+          totalPurchases: b.total_purchases ?? 0,
+          totalPaid: b.total_paid ?? 0,
+          balance: b.balance ?? 0,
+          isActive: b.is_active ?? true,
+          branchId: b.branch_id ?? null,
+          createdAt: b.created_at ?? now,
+        }));
+
+        set((state) => {
+          const backendIds = new Set(backendRecords.map((r) => r.id));
+          const localOnly = state.suppliers.filter((s) => !backendIds.has(s.id));
+          const merged = [...backendRecords, ...localOnly];
+          persist({ suppliers: merged, transactions: state.transactions });
+          return { suppliers: merged };
+        });
+      } catch { /* offline or unauthenticated — keep existing state */ }
     },
   };
 });

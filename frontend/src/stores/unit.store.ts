@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useSyncStore } from './sync.store';
+import api from '@/services/api';
 
 export interface UnitRecord {
   id: string;
@@ -15,6 +16,7 @@ interface UnitStore {
   addUnit: (data: Omit<UnitRecord, 'id' | 'createdAt'>) => UnitRecord;
   updateUnit: (id: string, data: Partial<UnitRecord>) => void;
   deleteUnit: (id: string) => void;
+  syncFromBackend: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'popmyc-units';
@@ -129,5 +131,41 @@ export const useUnitStore = create<UnitStore>((set) => ({
       ...getAuthContext(),
       version: Date.now(),
     });
+  },
+
+  syncFromBackend: async () => {
+    try {
+      interface BackendUnit {
+        id: string;
+        name: string;
+        code?: string;
+        symbol?: string;
+        description?: string;
+        is_active?: boolean;
+        created_at?: string;
+      }
+      const res = await api.get<{ results?: BackendUnit[] } | BackendUnit[]>('/units/?limit=500');
+      const raw: BackendUnit[] = Array.isArray(res.data)
+        ? res.data
+        : (res.data.results ?? []);
+
+      const now = new Date().toISOString();
+      const backendRecords: UnitRecord[] = raw.map((b) => ({
+        id: b.id,
+        name: b.name,
+        abbreviation: b.symbol ?? b.code ?? '',
+        description: b.description ?? '',
+        isActive: b.is_active ?? true,
+        createdAt: b.created_at ?? now,
+      }));
+
+      set((state) => {
+        const backendIds = new Set(backendRecords.map((r) => r.id));
+        const localOnly = state.units.filter((u) => !backendIds.has(u.id));
+        const merged = [...backendRecords, ...localOnly];
+        persist(merged);
+        return { units: merged };
+      });
+    } catch { /* offline or unauthenticated — keep existing state */ }
   },
 }));

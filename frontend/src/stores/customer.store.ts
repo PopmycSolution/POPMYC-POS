@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useSyncStore } from './sync.store';
+import api from '@/services/api';
 
 export interface CustomerRecord {
   id: string;
@@ -27,6 +28,7 @@ interface CustomerStore {
   addCustomer: (data: Omit<CustomerRecord, 'id' | 'createdAt' | 'totalPurchases' | 'totalTransactions' | 'creditBalance' | 'loyaltyPoints'>) => CustomerRecord;
   updateCustomer: (id: string, data: Partial<CustomerRecord>) => void;
   deleteCustomer: (id: string) => void;
+  syncFromBackend: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'popmyc-customers';
@@ -144,6 +146,63 @@ export const useCustomerStore = create<CustomerStore>((set) => {
         ...getAuthContext(),
         version: Date.now(),
       });
+    },
+
+    syncFromBackend: async () => {
+      try {
+        interface BackendCustomer {
+          id: string;
+          first_name: string;
+          last_name: string;
+          company?: string;
+          phone: string;
+          email?: string;
+          address?: string;
+          city?: string;
+          credit_limit?: number;
+          credit_balance?: number;
+          loyalty_points?: number;
+          total_purchases?: number;
+          total_transactions?: number;
+          group?: string;
+          is_active?: boolean;
+          branch_id?: string | null;
+          created_at?: string;
+        }
+        const res = await api.get<{ results?: BackendCustomer[] } | BackendCustomer[]>('/customers/?limit=500');
+        const raw: BackendCustomer[] = Array.isArray(res.data)
+          ? res.data
+          : (res.data.results ?? []);
+
+        const now = new Date().toISOString();
+        const backendRecords: CustomerRecord[] = raw.map((b) => ({
+          id: b.id,
+          firstName: b.first_name,
+          lastName: b.last_name,
+          company: b.company,
+          phone: b.phone,
+          email: b.email ?? '',
+          address: b.address ?? '',
+          city: b.city ?? '',
+          creditLimit: b.credit_limit ?? 0,
+          creditBalance: b.credit_balance ?? 0,
+          loyaltyPoints: b.loyalty_points ?? 0,
+          totalPurchases: b.total_purchases ?? 0,
+          totalTransactions: b.total_transactions ?? 0,
+          group: b.group ?? '',
+          isActive: b.is_active ?? true,
+          branchId: b.branch_id ?? null,
+          createdAt: b.created_at ?? now,
+        }));
+
+        set((state) => {
+          const backendIds = new Set(backendRecords.map((r) => r.id));
+          const localOnly = state.customers.filter((c) => !backendIds.has(c.id));
+          const merged = [...backendRecords, ...localOnly];
+          persist({ customers: merged });
+          return { customers: merged };
+        });
+      } catch { /* offline or unauthenticated — keep existing state */ }
     },
   };
 });

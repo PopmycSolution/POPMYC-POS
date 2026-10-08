@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Add syncFromBackend() methods to category, brand, unit, customer, and supplier stores, then wire them into useSync.ts download step so that downloaded changes from the cloud update all local stores. This is the download side of the sync engine — when another device uploads changes, this device pulls them on the next sync cycle. Depends on FEAT-001 being committed first so the git history is clean.",
+  "status": "completed",
+  "steps": [
+    "1. category.store.ts: Add syncFromBackend() to CategoryStore interface as '() => Promise<void>'. Implement: call api.get('/categories/?limit=500') (using the same 'api' import from '@/services/api' — add this import if not already present). Map BackendCategory fields: { id, name, code?, description?, is_active?, created_at? } to CategoryRecord { id, name, color: 'bg-blue-100' (default), accent: 'text-blue-700' (default), icon: '📦' (default), isDefault: false, createdAt }. Merge: backendMap overwrites local records by id, preserve local-only records not in backend. Call persist() and update state. Wrap in try/catch — offline/unauth silently no-ops.",
+    "2. brand.store.ts: Add syncFromBackend() to BrandStore interface. Implement: call api.get('/brands/?limit=500'). Map BackendBrand { id, name, code?, description?, logo?, website?, is_active?, created_at? } to BrandRecord { id, name, code, description, logoUrl: logo, website, isActive, productCount: 0, createdAt }. Merge pattern same as step 1. Wrap in try/catch.",
+    "3. unit.store.ts: Add syncFromBackend() to UnitStore interface. Implement: call api.get('/units/?limit=500'). Map BackendUnit { id, name, code?, symbol?, description?, is_active?, created_at? } to UnitRecord { id, name, abbreviation: symbol ?? code ?? '', description, isActive, createdAt }. Note: the backend UnitOfMeasure model has fields: name, code, symbol, allow_fractional, base_unit, conversion_factor. Merge pattern same as above. Wrap in try/catch.",
+    "4. customer.store.ts: Add syncFromBackend() to CustomerStore interface. Implement: call api.get('/customers/?limit=500'). Map BackendCustomer { id, first_name, last_name, company?, phone, email?, address?, city?, credit_limit?, credit_balance?, loyalty_points?, total_purchases?, total_transactions?, group?, is_active?, branch_id?, created_at? } to CustomerRecord camelCase shape. Merge pattern same as above. Wrap in try/catch.",
+    "5. supplier.store.ts: Add syncFromBackend() to SupplierStore interface. Implement: call api.get('/suppliers/?limit=500'). Read the existing supplier.store.ts addSupplier method to understand the exact SupplierRecord shape. Map BackendSupplier { id, name, code, supplier_type, contact_person, phone, email, address, city, country, tin, credit_limit, credit_days, total_purchases, total_paid, balance, is_active, branch_id?, created_at? } to SupplierRecord camelCase. Merge pattern same as above. Wrap in try/catch.",
+    "6. useSync.ts: Add five new imports at the top of the file (after existing store imports): 'import { useCategoryStore } from \"@/stores/category.store\";', 'import { useBrandStore } from \"@/stores/brand.store\";', 'import { useUnitStore } from \"@/stores/unit.store\";', 'import { useCustomerStore } from \"@/stores/customer.store\";', 'import { useSupplierStore } from \"@/stores/supplier.store\";'. Then inside the useSync function body, after the existing 'const syncSettingsFromBackend = useSettingsStore((s) => s.syncFromBackend)' line, add five parallel lines: const syncCategoriesFromBackend = useCategoryStore((s) => s.syncFromBackend); const syncBrandsFromBackend = useBrandStore((s) => s.syncFromBackend); const syncUnitsFromBackend = useUnitStore((s) => s.syncFromBackend); const syncCustomersFromBackend = useCustomerStore((s) => s.syncFromBackend); const syncSuppliersFromBackend = useSupplierStore((s) => s.syncFromBackend);",
+    "7. useSync.ts download block: In the 'if (downloaded > 0)' block (around line 145), after the existing 'void syncSettingsFromBackend()' call, add: void syncCategoriesFromBackend(); void syncBrandsFromBackend(); void syncUnitsFromBackend(); void syncCustomersFromBackend(); void syncSuppliersFromBackend(); Also add these five new references to the useCallback dependency array at the end of the syncNow function.",
+    "8. Set FEAT-001 and FEAT-002 status to 'completed' in their respective JSON files and record findings.",
+    "9. Commit: git add frontend/src/stores/category.store.ts frontend/src/stores/brand.store.ts frontend/src/stores/unit.store.ts frontend/src/stores/customer.store.ts frontend/src/stores/supplier.store.ts frontend/src/hooks/useSync.ts && git commit -m 'feat: syncFromBackend for categories/brands/units/customers/suppliers + download wiring'"
+  ],
+  "acceptance_criteria": [
+    "Running 'npm run build' in c:\\xampp\\htdocs\\POS\\frontend produces no TypeScript errors",
+    "useCategoryStore, useBrandStore, useUnitStore, useCustomerStore, useSupplierStore each expose a syncFromBackend() method",
+    "useSync.ts imports and calls all five syncFromBackend methods in the download block",
+    "When download returns count > 0, all six stores (settings + five new) have their syncFromBackend() called",
+    "syncNow useCallback dependency array includes all five new syncFromBackend references",
+    "Manual test: after uploading a category from Device A, Device B's next sync cycle calls /categories/ and the new category appears in DevTools localStorage popmyc-categories"
+  ],
+  "verification": [
+    "cd c:\\xampp\\htdocs\\POS\\frontend && npm run build — must complete with 0 TypeScript errors",
+    "In browser DevTools Console, run: 'import { useCategoryStore } from \"./stores/category.store\"; useCategoryStore.getState().syncFromBackend()' — should not throw, should hit /api/v1/categories/ endpoint (visible in Network tab)",
+    "Trigger a sync cycle while online, check Network tab for /api/v1/sync/download/ — if count > 0, then also see /api/v1/categories/, /api/v1/brands/, /api/v1/units/, /api/v1/customers/, /api/v1/suppliers/ calls fired"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented syncFromBackend() on all five stores (category, brand, unit, customer, supplier). Each uses api.get with limit=500, handles both DRF paginated ({results:[]}) and plain array responses, maps backend snake_case to frontend camelCase, and merges with local-only records (backend wins by id). useSync.ts wired all five into the download block and dependency array. Build: 0 TypeScript errors."
+}

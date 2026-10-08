@@ -23,6 +23,11 @@ import { useSyncStore }       from '@/stores/sync.store';
 import { useAuthStore }       from '@/stores/auth.store';
 import { useSalesStore }      from '@/stores/sales.store';
 import { useSettingsStore }   from '@/stores/settings.store';
+import { useCategoryStore }   from '@/stores/category.store';
+import { useBrandStore }      from '@/stores/brand.store';
+import { useUnitStore }       from '@/stores/unit.store';
+import { useCustomerStore }   from '@/stores/customer.store';
+import { useSupplierStore }   from '@/stores/supplier.store';
 import * as syncService       from '@/services/sync.service';
 
 const BATCH_SIZE        = 25;    // records per upload batch
@@ -63,6 +68,11 @@ export function useSync(): UseSyncReturn {
 
   const updateSaleSync = useSalesStore((s) => s.updateSaleSync);
   const syncSettingsFromBackend = useSettingsStore((s) => s.syncFromBackend);
+  const syncCategoriesFromBackend = useCategoryStore((s) => s.syncFromBackend);
+  const syncBrandsFromBackend = useBrandStore((s) => s.syncFromBackend);
+  const syncUnitsFromBackend = useUnitStore((s) => s.syncFromBackend);
+  const syncCustomersFromBackend = useCustomerStore((s) => s.syncFromBackend);
+  const syncSuppliersFromBackend = useSupplierStore((s) => s.syncFromBackend);
   const { accessToken } = useAuthStore();
 
   const pendingCount  = useSyncStore((s) => s.pendingCount());
@@ -233,6 +243,11 @@ export function useSync(): UseSyncReturn {
         // so the local store reflects the latest values immediately.
         if (downloaded > 0) {
           void syncSettingsFromBackend();
+          void syncCategoriesFromBackend();
+          void syncBrandsFromBackend();
+          void syncUnitsFromBackend();
+          void syncCustomersFromBackend();
+          void syncSuppliersFromBackend();
         }
       } catch { /* download failing is non-fatal — will retry next cycle */ }
 
@@ -261,7 +276,7 @@ export function useSync(): UseSyncReturn {
       setIsSyncing(false);
       syncRunningRef.current = false;
     }
-  }, [queue, deviceId, lastSyncAt, accessToken, markSyncing, markSynced, markFailed, markConflict, setIsSyncing, setLastSyncAt, pruneQueue, appendLog, updateSaleSync, syncSettingsFromBackend]);
+  }, [queue, deviceId, lastSyncAt, accessToken, markSyncing, markSynced, markFailed, markConflict, setIsSyncing, setLastSyncAt, pruneQueue, appendLog, updateSaleSync, syncSettingsFromBackend, syncCategoriesFromBackend, syncBrandsFromBackend, syncUnitsFromBackend, syncCustomersFromBackend, syncSuppliersFromBackend]);
 
   // ── Auto-sync when coming back online ─────────────────────────────────────
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useSyncStore } from './sync.store';
+import api from '@/services/api';
 
 export interface BrandRecord {
   id: string;
@@ -18,6 +19,7 @@ interface BrandStore {
   addBrand: (data: Omit<BrandRecord, 'id' | 'createdAt' | 'productCount'>) => BrandRecord;
   updateBrand: (id: string, data: Partial<BrandRecord>) => void;
   deleteBrand: (id: string) => void;
+  syncFromBackend: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'popmyc-brands';
@@ -116,5 +118,45 @@ export const useBrandStore = create<BrandStore>((set) => ({
       ...getAuthContext(),
       version: Date.now(),
     });
+  },
+
+  syncFromBackend: async () => {
+    try {
+      interface BackendBrand {
+        id: string;
+        name: string;
+        code?: string;
+        description?: string;
+        logo?: string;
+        website?: string;
+        is_active?: boolean;
+        created_at?: string;
+      }
+      const res = await api.get<{ results?: BackendBrand[] } | BackendBrand[]>('/brands/?limit=500');
+      const raw: BackendBrand[] = Array.isArray(res.data)
+        ? res.data
+        : (res.data.results ?? []);
+
+      const now = new Date().toISOString();
+      const backendRecords: BrandRecord[] = raw.map((b) => ({
+        id: b.id,
+        name: b.name,
+        code: b.code ?? '',
+        description: b.description ?? '',
+        logoUrl: b.logo,
+        website: b.website,
+        isActive: b.is_active ?? true,
+        productCount: 0,
+        createdAt: b.created_at ?? now,
+      }));
+
+      set((state) => {
+        const backendIds = new Set(backendRecords.map((r) => r.id));
+        const localOnly = state.brands.filter((b) => !backendIds.has(b.id));
+        const merged = [...backendRecords, ...localOnly];
+        persist(merged);
+        return { brands: merged };
+      });
+    } catch { /* offline or unauthenticated — keep existing state */ }
   },
 }));

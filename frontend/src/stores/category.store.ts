@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useSyncStore } from './sync.store';
+import api from '@/services/api';
 
 export interface CategoryRecord {
   id: string;
@@ -16,6 +17,7 @@ interface CategoryStore {
   addCategory: (data: { name: string; color: string; accent: string; icon: string }) => CategoryRecord;
   deleteCategory: (id: string) => void;
   seedForBusinessType: (businessType: string) => void;
+  syncFromBackend: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'popmyc-categories';
@@ -329,6 +331,42 @@ export const useCategoryStore = create<CategoryStore>((set) => {
       const seeded = presetsToRecords(presets);
       persist(seeded);
       set({ categories: seeded });
+    },
+
+    syncFromBackend: async () => {
+      try {
+        interface BackendCategory {
+          id: string;
+          name: string;
+          code?: string;
+          description?: string;
+          is_active?: boolean;
+          created_at?: string;
+        }
+        const res = await api.get<{ results?: BackendCategory[] } | BackendCategory[]>('/categories/?limit=500');
+        const raw: BackendCategory[] = Array.isArray(res.data)
+          ? res.data
+          : (res.data.results ?? []);
+
+        const now = new Date().toISOString();
+        const backendRecords: CategoryRecord[] = raw.map((b) => ({
+          id: b.id,
+          name: b.name,
+          color: 'bg-blue-100',
+          accent: 'text-blue-700',
+          icon: '📦',
+          isDefault: false,
+          createdAt: b.created_at ?? now,
+        }));
+
+        set((state) => {
+          const backendIds = new Set(backendRecords.map((r) => r.id));
+          const localOnly = state.categories.filter((c) => !backendIds.has(c.id));
+          const merged = [...backendRecords, ...localOnly];
+          persist(merged);
+          return { categories: merged };
+        });
+      } catch { /* offline or unauthenticated — keep existing state */ }
     },
   };
 });
