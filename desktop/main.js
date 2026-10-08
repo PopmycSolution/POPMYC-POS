@@ -556,6 +556,8 @@ function createMainWindow() {
 
   // After load, check if this is the first launch after an update.
   // If so, clear the Electron renderer cache so old JS/CSS is not used.
+  // Also always clear storage on startup to prevent stale cached assets
+  // from a previous version showing incorrect UI (e.g. PWA layout on desktop).
   const versionFile = path.join(getDataDir(), 'last-known-version.txt');
   mainWindow.webContents.once('did-finish-load', () => {
     try {
@@ -563,13 +565,17 @@ function createMainWindow() {
         ? fs.readFileSync(versionFile, 'utf8').trim()
         : null;
       if (lastVersion !== APP_VERSION) {
-        // Version changed — clear cache to ensure new JS/CSS is loaded
+        // Version changed — clear ALL caches to ensure new JS/CSS is loaded
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.session.clearCache()
+          const ses = mainWindow.webContents.session;
+          // Clear both HTTP cache and storage cache
+          Promise.all([
+            ses.clearCache(),
+            ses.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] }),
+          ])
             .then(() => {
               fs.writeFileSync(versionFile, APP_VERSION, 'utf8');
-              console.log(`[Desktop] Cache cleared after update ${lastVersion} → ${APP_VERSION}`);
-              // Reload once to pick up fresh assets
+              console.log(`[Desktop] Full cache cleared after update ${lastVersion} → ${APP_VERSION}`);
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.reload();
               }
