@@ -13,6 +13,7 @@
 
 import { uploadBatch, registerDevice, isLocalSession } from './sync.service';
 import { useSyncStore } from '@/stores/sync.store';
+import { useAuthStore } from '@/stores/auth.store';
 import { useProductStore } from '@/stores/product.store';
 import { useCategoryStore } from '@/stores/category.store';
 import { useBrandStore } from '@/stores/brand.store';
@@ -37,18 +38,24 @@ export function isInitialSyncDone(): boolean {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function getAuthContext(): { businessId: string | null; branchId: string | null } {
+  // The business UUID is stored in the sync queue items and also in the
+  // popmyc-auth-storage state under user.business (set by the backend login response).
   try {
     const stored = localStorage.getItem('popmyc-auth-storage');
-    const auth = stored
-      ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } }).state
+    const parsed = stored
+      ? (JSON.parse(stored) as { state?: { user?: { business?: string; branch?: string } } })
       : undefined;
-    return {
-      businessId: auth?.user?.business ?? null,
-      branchId: auth?.user?.branch ?? null,
-    };
-  } catch {
-    return { businessId: null, branchId: null };
-  }
+    const business = parsed?.state?.user?.business ?? null;
+    const branch   = parsed?.state?.user?.branch   ?? null;
+    if (business) return { businessId: business, branchId: branch };
+  } catch { /* noop */ }
+  // Secondary fallback: check the auth store in memory
+  const user = useAuthStore.getState().user;
+  const branchId = user?.branch ?? null;
+  // business field may not be on the User type but may be present at runtime
+  // (the backend login response includes it)
+  const businessId = (user as unknown as Record<string, unknown>)?.['business'] as string | null ?? null;
+  return { businessId, branchId };
 }
 
 function toQueueItem(
@@ -80,27 +87,29 @@ function toQueueItem(
 async function pushBatches(
   items: SyncQueueItem[],
   deviceId: string,
-): Promise<void> {
+): Promise<number> {
+  let pushed = 0;
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     const batch = items.slice(i, i + BATCH_SIZE);
     try {
-      await uploadBatch(batch, deviceId);
+      const result = await uploadBatch(batch, deviceId);
+      pushed += result.accepted.length + result.duplicates.length;
     } catch (err: unknown) {
-      // Network error / 5xx — log and stop this entity group; do not set done flag
       const isAxiosErr = (e: unknown): e is { response?: { status?: number } } =>
         typeof e === 'object' && e !== null && 'response' in e;
 
       if (isAxiosErr(err)) {
         const status = err.response?.status ?? 0;
         if (status >= 400 && status < 500) {
-          // 4xx (including 400/409 conflict) — swallow and continue
-          return;
+          // 4xx (conflict/validation) — skip this batch and continue with the next
+          continue;
         }
       }
       // Genuine network error or 5xx — rethrow so caller can skip done-flag
       throw err;
     }
   }
+  return pushed;
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -113,11 +122,11 @@ async function pushBatches(
  * - Non-blocking: caller should `void` this call.
  * - Desktop only: IS_PWA guard skips the call immediately on web.
  */
-export async function runInitialCloudSync(): Promise<void> {
+export async function runInitialCloudSync(): Promise<number> {
   // Guards
-  if (IS_PWA) return;
-  if (isInitialSyncDone()) return;
-  if (isLocalSession()) return;
+  if (IS_PWA) return 0;
+  if (isInitialSyncDone()) return 0;
+  if (isLocalSession()) return 0;
 
   const { businessId, branchId } = getAuthContext();
   const deviceId = useSyncStore.getState().deviceId;
@@ -127,7 +136,7 @@ export async function runInitialCloudSync(): Promise<void> {
     await registerDevice({ device_id: deviceId, business_id: businessId, branch_id: branchId });
   } catch (err: unknown) {
     console.warn(LOG_PREFIX, 'device registration failed — aborting initial sync', err);
-    return;
+    return 0;
   }
 
   // ── Entity groups (order matters: catalog before products) ────────────────
@@ -169,21 +178,27 @@ export async function runInitialCloudSync(): Promise<void> {
     },
   ];
 
+  // Guard: require a business ID — without it records would be uploaded
+  // without business association and be invisible to the user.
+  if (!businessId) {
+    console.warn(LOG_PREFIX, 'no businessId found — skipping initial sync (will retry on next login)');
+    return 0;
+  }
+
   try {
+    let totalPushed = 0;
     for (const { records, appLabel, modelName } of entities) {
       if (records.length === 0) continue;
-
       const items = records.map((r) =>
         toQueueItem(r, appLabel, modelName, businessId, branchId),
       );
-
-      await pushBatches(items, deviceId);
+      totalPushed += await pushBatches(items, deviceId);
     }
-
-    // All entities processed — set the done flag
     localStorage.setItem(FLAG_KEY, 'true');
+    console.info(LOG_PREFIX, `initial sync complete — ${totalPushed} records pushed`);
+    return totalPushed;
   } catch (err) {
-    // Transient error — do NOT set done flag so the next login retries
     console.warn(LOG_PREFIX, 'initial sync failed — will retry on next login', err);
+    return 0;
   }
 }

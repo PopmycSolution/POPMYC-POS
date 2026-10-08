@@ -30,12 +30,16 @@ export function useInitialCloudSync(enabled: boolean): { status: InitialSyncStat
 
     setStatus('syncing');
     void runInitialCloudSync()
-      .then(() => {
-        setStatus('done');
-        setTimeout(() => setStatus('idle'), 3000);
+      .then((count) => {
+        if (count > 0) {
+          setStatus('done');
+          setTimeout(() => setStatus('idle'), 3000);
+        } else {
+          // Nothing new to push (all already on cloud) — skip the toast
+          setStatus('idle');
+        }
       })
       .catch(() => {
-        // Errors already logged inside runInitialCloudSync
         setStatus('idle');
       });
   }, [enabled]);

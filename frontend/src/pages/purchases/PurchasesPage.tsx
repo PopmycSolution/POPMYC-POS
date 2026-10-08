@@ -13,6 +13,7 @@ import { usePurchaseStore, type PurchaseOrder, type PurchaseItem } from '@/store
 import { useBranchFilter } from '@/hooks/useBranchFilter';
 import { useBranchStore } from '@/stores/branch.store';
 import { useProductStore } from '@/stores/product.store';
+import { useSyncStore } from '@/stores/sync.store';
 import { useSupplierStore } from '@/stores/supplier.store';
 import { useSettingsStore } from '@/stores/settings.store';
 import api from '@/services/api';
@@ -593,10 +594,28 @@ export default function PurchasesPage() {
         }),
       };
       syncFromApi(updated as unknown as Record<string, unknown>);
-      // Update local product stock for each received item
+      // Update local product stock for each received item.
+      // Always update global stockQuantity. When we have a concrete branch,
+      // also update branch-level stock via branchInventoryStore.
       for (const item of itemsToSend) {
         if (item.productId && item.qtyToReceive > 0) {
+          // Pass branchId only when set — incrementStock handles both cases:
+          // with branchId → updates branch stock; undefined → updates global only
           useProductStore.getState().incrementStock(item.productId, item.qtyToReceive, activeBranchId ?? undefined);
+          // Enqueue so the delta is uploaded when connectivity is restored
+          const product = useProductStore.getState().products.find((p) => p.id === item.productId);
+          if (product) {
+            useSyncStore.getState().enqueue({
+              offlineUuid: item.productId,
+              appLabel:    'products',
+              modelName:   'product',
+              action:      'update',
+              payload:     { ...product } as unknown as Record<string, unknown>,
+              businessId:  null,
+              branchId:    activeBranchId,
+              version:     Date.now(),
+            });
+          }
         }
       }
       setReceiveModalOpen(false);
@@ -632,13 +651,37 @@ export default function PurchasesPage() {
       });
       // Re-fetch the updated PO to get batch tracking data
       await fetchOrders();
-      // Update local product stock immediately, then sync from backend for authoritative data
+      // Optimistic local stock update — applied immediately so the UI reflects
+      // the new qty without waiting for the backend to settle.
+      // activeBranchId===null means Super Admin "All Branches" view — update
+      // global stockQuantity directly (no branch scoping).
       for (const item of itemsToSend) {
         if (item.productId && item.qtyToReceive > 0) {
-          useProductStore.getState().incrementStock(item.productId, item.qtyToReceive, activeBranchId ?? undefined);
+          useProductStore.getState().incrementStock(
+            item.productId,
+            item.qtyToReceive,
+            activeBranchId ?? undefined,   // undefined → global update
+          );
+          // Enqueue so offline deltas are replayed to the backend
+          const product = useProductStore.getState().products.find((p) => p.id === item.productId);
+          if (product) {
+            useSyncStore.getState().enqueue({
+              offlineUuid: item.productId,
+              appLabel:    'products',
+              modelName:   'product',
+              action:      'update',
+              payload:     { ...product } as unknown as Record<string, unknown>,
+              businessId:  product.id ? null : null,
+              branchId:    activeBranchId,
+              version:     Date.now(),
+            });
+          }
         }
       }
-      void useProductStore.getState().syncFromBackend();
+      // Delay backend reconciliation by 2 s — gives the server time to commit
+      // the GRN before we pull authoritative stock, preventing a race that
+      // would silently reverse the optimistic increment above.
+      setTimeout(() => void useProductStore.getState().syncFromBackend(), 2000);
       setReceiveModalOpen(false);
       closeDetail();
     } catch (err: unknown) {
