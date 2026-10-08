@@ -6,6 +6,7 @@
 .env
 .env.*
 !.env.example
+!.env.pwa
 *.secret
 *.pem
 *.key

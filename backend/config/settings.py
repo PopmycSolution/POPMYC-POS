@@ -219,7 +219,11 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:5173,http://localhost:3000,http://127.0.0.1:8000",
+        # Desktop dev origins + Render's own origin so the PWA can call the API.
+        # The PWA domain (e.g. https://pos.popmyc.com) must also be added here
+        # once the domain is set up — either via the env var on Render or below.
+        "http://localhost:5173,http://localhost:3000,http://127.0.0.1:8000,"
+        "https://popmyc-pos.onrender.com",
     ).split(",")
     if origin.strip()
 ]

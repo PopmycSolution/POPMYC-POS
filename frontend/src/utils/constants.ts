@@ -1,22 +1,21 @@
 export const APP_NAME: string = 'POPMYC Retail POS';
-export const APP_VERSION: string = '1.1.4';
+export const APP_VERSION: string = '1.1.5';
 export const DEFAULT_CURRENCY: string = 'GHS';
 export const DEFAULT_CURRENCY_SYMBOL: string = 'GH₵';
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_URL as string) || '/api/v1';
 
 /**
- * Base URL for the POPMYC cloud licensing service (Render).
- *
- * IMPORTANT: This URL is used ONLY for the first-run trial activation
- * handshake.  Normal POS operations (login, sales, products, inventory,
- * purchases, reports) always use API_BASE_URL pointing at the LOCAL backend.
- *
- * This value must never be used as a proxy for ordinary POS API calls.
- * Render must NOT be required for day-to-day POS operation.
- *
- * Configurable via VITE_CLOUD_LICENSE_URL in the .env file.
- * Default points to the live Render deployment.
+ * True when running as a PWA (web deployment) rather than the Electron desktop app.
+ * Used to hide Electron-only features (update notifications, service management, etc.)
+ */
+export const IS_PWA: boolean =
+  !!(import.meta.env.VITE_IS_PWA as string) ||
+  // Also detect by checking if we're NOT in Electron
+  (typeof window !== 'undefined' && !('popmycDesktop' in window) && !window.location.href.startsWith('http://127.0.0.1'));
+
+/**
+ * Cloud backend URL.
  */
 export const CLOUD_LICENSE_URL: string =
   (import.meta.env.VITE_CLOUD_LICENSE_URL as string) ||

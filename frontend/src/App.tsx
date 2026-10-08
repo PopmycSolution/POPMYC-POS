@@ -38,13 +38,23 @@ import { fetchSetupStatus } from '@/services/setup.service';
 import { retryPendingCompletion } from '@/services/cloudLicense.service';
 import { silentRefreshToken } from '@/services/api';
 import UpdateToast from '@/components/updater/UpdateToast';
+import PWAInstallPrompt from '@/components/pwa/PWAInstallPrompt';
+import OfflineIndicator from '@/components/pwa/OfflineIndicator';
+import { IS_PWA } from '@/utils/constants';
 
 // ── Setup guard — checks first-run state once on cold start ───────────────────
+// On PWA mode we skip the setup check entirely: the business owner already has
+// an account on the Render backend, so there's never a "needs setup" state.
+// Going straight to login is both faster and avoids a spurious /setup redirect
+// when the PWA can't reach the backend's setup/status/ endpoint.
 function SetupGuard({ children }: { children: ReactNode }) {
-  const [checked, setChecked]     = useState(false);
+  const [checked, setChecked]       = useState(IS_PWA); // PWA: already "checked"
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
+    // Skip the setup check entirely in PWA mode.
+    if (IS_PWA) return;
+
     fetchSetupStatus()
       .then((s) => {
         setNeedsSetup(!s.setup_complete);
@@ -196,8 +206,12 @@ export function App() {
 
   return (
     <>
-      {/* Global auto-update toast — shown on every page when an update is available */}
+      {/* Global auto-update toast — desktop only */}
       <UpdateToast />
+      {/* PWA offline indicator — shown on web when no connection */}
+      <OfflineIndicator />
+      {/* PWA install prompt — shown on mobile browsers */}
+      <PWAInstallPrompt />
       <Routes>
       {/* DB setup screen — shown by Electron when PostgreSQL/DB is missing */}
       <Route path="/db-setup" element={<DbSetupScreen />} />
