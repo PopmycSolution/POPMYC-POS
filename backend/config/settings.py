@@ -224,7 +224,7 @@ CORS_ALLOWED_ORIGINS = [
         # on the Render backend service (no code change needed).
         "http://localhost:5173,http://localhost:3000,http://127.0.0.1:8000,"
         "https://popmyc-pos.onrender.com,"
-        "https://popmyc-pos-app.onrender.com",
+        "https://popmyc-poos-app.onrender.com",
     ).split(",")
     if origin.strip()
 ]
