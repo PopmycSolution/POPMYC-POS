@@ -8,17 +8,10 @@ from django.urls import path
 from . import views
 from . import sync_views
 from . import trial_views
-from . import diagnostic_views
 
 app_name = "cloud"
 
 urlpatterns = [
-    # ── TEMPORARY diagnostic endpoint — remove after diagnosis ───────────────
-    # GET /api/v1/cloud/diagnostics/trial-codes/
-    path("diagnostics/trial-codes/",
-         diagnostic_views.TrialCodeDiagnosticsView.as_view(),
-         name="diagnostics-trial-codes"),
-
     # ── Trial activation (two-phase cloud TrialCode bridge) ───────────────────
     # These are AllowAny — no prior auth needed (pre-login first-run flow).
     # Mounted under /api/v1/cloud/ which is already in LicenseCheckMiddleware

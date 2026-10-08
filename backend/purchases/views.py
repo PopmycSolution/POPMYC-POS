@@ -281,7 +281,9 @@ class PurchaseOrderViewSet(BusinessScopedMixin, viewsets.ModelViewSet):
                 total_value += line_value
 
                 # ── 5. Update stock & write movement (only if STOCK_ENABLED) ──
-                if track_stock and branch_id and warehouse_id:
+                # warehouse_id is optional — stock tracking works without it
+                # (branch-level tracking is sufficient for most single-warehouse setups).
+                if track_stock and branch_id:
                     # Use select_for_update to prevent concurrent GRN races
                     sl = (
                         ProductStockLevel.objects
@@ -289,7 +291,7 @@ class PurchaseOrderViewSet(BusinessScopedMixin, viewsets.ModelViewSet):
                         .filter(
                             product_id=product_id,
                             branch_id=branch_id,
-                            warehouse_id=warehouse_id,
+                            warehouse_id=warehouse_id,  # None is valid — matches rows with no warehouse
                             variant=None,
                         )
                         .first()

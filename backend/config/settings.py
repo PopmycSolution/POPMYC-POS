@@ -269,11 +269,6 @@ SYNC_CLOUD_URL = os.environ.get(
     ""
 )
 
-SYNC_CLOUD_TOKEN = os.environ.get(
-    "SYNC_CLOUD_TOKEN",
-    ""
-)
-
 # ── Shared sync token ──────────────────────────────────────────────────────────
 # This token is the shared secret between Render (cloud) and every local POS.
 # It is set as an environment variable on Render and written to each local

@@ -938,7 +938,7 @@ class ActivationReservation(models.Model):
     # ── Class helpers ──────────────────────────────────────────────────────────
 
     @classmethod
-    def make_token() -> str:
+    def make_token(cls) -> str:
         """
         Generate a fresh URL-safe reservation token (48 chars, 36 random bytes).
         Returns the raw token — caller must store only the hash.
