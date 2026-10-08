@@ -241,6 +241,43 @@ export async function runInitialCloudSync(): Promise<number> {
       );
       totalPushed += await pushBatches(items, deviceId);
     }
+
+    // ── Push users via direct API (not sync queue — passwords need special handling) ──
+    try {
+      const { useUserStore } = await import('@/stores/user.store');
+      const localUsers = useUserStore.getState().users;
+      if (localUsers.length > 0) {
+        // Fetch existing cloud users to skip duplicates
+        let cloudUsernames: Set<string> = new Set();
+        try {
+          const res = await api.get<{ results?: Array<{ username?: string; email?: string }> } | Array<{ username?: string; email?: string }>>('/accounts/users/?page_size=200');
+          const list = Array.isArray(res.data) ? res.data : (res.data.results ?? []);
+          cloudUsernames = new Set(list.map((u) => (u.username ?? u.email ?? '').toLowerCase()));
+        } catch { /* ignore — will just try to create all */ }
+
+        for (const user of localUsers) {
+          const key = (user.username || user.email || '').toLowerCase();
+          if (key && cloudUsernames.has(key)) continue;
+          try {
+            const username = user.username || user.email?.split('@')[0] || `user_${user.id.slice(0, 8)}`;
+            await api.post('/accounts/users/', {
+              username:             username,
+              email:                user.email || '',
+              first_name:           user.firstName || '',
+              last_name:            user.lastName || '',
+              phone_number:         user.phone || '',
+              password:             `POPMYC${username}@2025`,
+              must_change_password: true,
+              is_active:            user.isActive !== false,
+              business:             businessId,
+              branch:               branchId ?? undefined,
+            });
+            totalPushed++;
+          } catch { /* skip individual user errors */ }
+        }
+      }
+    } catch { /* user store unavailable — skip */ }
+
     localStorage.setItem(FLAG_KEY, 'true');
     console.info(LOG_PREFIX, `initial sync complete — ${totalPushed} records pushed`);
     return totalPushed;
