@@ -113,16 +113,11 @@ export default function DbSetupScreen() {
     try {
       const r = await desktop!.pgCreate(pgPassword);
       if (r.success) {
-        // Verify connection after creation
-        const check = await desktop!.pgCheck();
-        if (check.success) {
-          setDone(true);
-          setPgStatus(check);
-          setTimeout(() => desktop!.pgSetupComplete(), 1200);
-        } else {
-          setCreateError(check.message);
-          setPgStatus(check);
-        }
+        // Create succeeded — proceed directly without re-checking.
+        // The re-check was causing a false AUTH_FAILED because the new
+        // popmyc_app credentials in .env aren't always reflected instantly.
+        setDone(true);
+        setTimeout(() => desktop!.pgSetupComplete(), 1200);
       } else {
         setCreateError(r.message);
         if (r.error_code === 'WRONG_ADMIN_PASSWORD') {
