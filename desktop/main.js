@@ -139,7 +139,7 @@ function generateSecretKey() {
   return Array.from(bytes, b => alphabet[b % alphabet.length]).join('');
 }
 
-function ensureDesktopEnv(dataDir) {
+async function ensureDesktopEnv(dataDir) {
   const envPath     = path.join(dataDir, '.env');
   const versionFile = path.join(dataDir, 'last-known-version.txt');
 
@@ -164,10 +164,29 @@ function ensureDesktopEnv(dataDir) {
 
   if (!fs.existsSync(envPath)) {
     const secretKey = generateSecretKey();
-    // Generate a unique DB name per installation so reinstalls never share data.
-    // Format: popmyc_<8 random hex chars> — unique, PostgreSQL-safe, easy to identify.
     const uniqueSuffix = crypto.randomBytes(4).toString('hex');
     const dbName = `popmyc_${uniqueSuffix}`;
+
+    // Detect actual PostgreSQL port — scan common ports so the .env
+    // has the right port even when customer installed PG on 5433, 5434 etc.
+    let detectedPort = 5432;
+    const portsToTry = [5432, 5433, 5434, 5435, 5436];
+    for (const p of portsToTry) {
+      try {
+        const net = require('net');
+        const open = await new Promise((resolve) => {
+          const sock = new net.Socket();
+          sock.setTimeout(500);
+          sock.on('connect', () => { sock.destroy(); resolve(true); });
+          sock.on('error',   () => { sock.destroy(); resolve(false); });
+          sock.on('timeout', () => { sock.destroy(); resolve(false); });
+          sock.connect(p, '127.0.0.1');
+        });
+        if (open) { detectedPort = p; break; }
+      } catch { /* continue */ }
+    }
+    console.log(`[Desktop] PostgreSQL detected on port ${detectedPort}`);
+
     const content = [
       `# POPMYC POS Desktop Configuration`,
       `# Generated automatically on first run — ${new Date().toISOString()}`,
@@ -176,7 +195,7 @@ function ensureDesktopEnv(dataDir) {
       `DB_USER=postgres`,
       `DB_PASSWORD=changeme`,
       `DB_HOST=localhost`,
-      `DB_PORT=5432`,
+      `DB_PORT=${detectedPort}`,
       ``,
       `DJANGO_SECRET_KEY=${secretKey}`,
       `DJANGO_DEBUG=False`,
@@ -594,7 +613,6 @@ function createMainWindow() {
 
       if (lastVersion !== APP_VERSION) {
         // Version changed OR fresh install — clear ALL caches + localStorage
-        // to prevent stale PWA layout, old Zustand store data, or cached JS
         if (mainWindow && !mainWindow.isDestroyed()) {
           const ses = mainWindow.webContents.session;
           Promise.all([
@@ -603,7 +621,7 @@ function createMainWindow() {
               storages: [
                 'cachestorage',
                 'serviceworkers',
-                'localstorage',   // clears Zustand stores — prevents stale PWA flags
+                'localstorage',
                 'cookies',
                 'indexdb',
               ],
@@ -616,6 +634,15 @@ function createMainWindow() {
                 mainWindow.webContents.reload();
               }
             })
+            .catch(() => {});
+        }
+      } else {
+        // Same version — but still clear localStorage to remove stale auth
+        // tokens that might skip the Setup Wizard on a fresh DB install.
+        // This is safe — the auth store re-hydrates from the backend on login.
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.session
+            .clearStorageData({ storages: ['localstorage', 'indexdb'] })
             .catch(() => {});
         }
       }
@@ -991,7 +1018,7 @@ app.whenReady().then(async () => {
   createSplashWindow();
 
   const dataDir = ensureDataDir();
-  ensureDesktopEnv(dataDir);
+  await ensureDesktopEnv(dataDir);
 
   // ── Step 1: PostgreSQL check ───────────────────────────────────────────────
   const pgResult = await runPgScript('check', dataDir);

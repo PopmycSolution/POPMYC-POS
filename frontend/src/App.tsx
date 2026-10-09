@@ -55,19 +55,29 @@ function SetupGuard({ children }: { children: ReactNode }) {
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
-    // Skip the setup check entirely in PWA mode.
     if (IS_PWA) return;
 
-    fetchSetupStatus()
-      .then((s) => {
-        setNeedsSetup(!s.setup_complete);
-        setChecked(true);
-      })
-      .catch(() => {
-        // If the health check itself fails (DB down, backend not started),
-        // let the app render normally — the login page will surface the error.
-        setChecked(true);
-      });
+    let retries = 0;
+    const maxRetries = 5;
+
+    function tryCheck() {
+      fetchSetupStatus()
+        .then((s) => {
+          setNeedsSetup(!s.setup_complete);
+          setChecked(true);
+        })
+        .catch(() => {
+          retries++;
+          if (retries < maxRetries) {
+            // Backend may still be starting — retry after 1s
+            setTimeout(tryCheck, 1000);
+          } else {
+            // Give up after 5 retries — let login page surface the error
+            setChecked(true);
+          }
+        });
+    }
+    tryCheck();
   }, []);
 
   if (!checked) {
