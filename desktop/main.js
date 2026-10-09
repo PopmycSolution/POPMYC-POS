@@ -140,7 +140,28 @@ function generateSecretKey() {
 }
 
 function ensureDesktopEnv(dataDir) {
-  const envPath = path.join(dataDir, '.env');
+  const envPath     = path.join(dataDir, '.env');
+  const versionFile = path.join(dataDir, 'last-known-version.txt');
+
+  // ── Fresh install detection ────────────────────────────────────────────────
+  // If .env exists BUT last-known-version.txt does NOT exist, this is a
+  // reinstall over a previous installation (the installer doesn't wipe
+  // ProgramData). Delete the stale .env so a fresh one is generated with
+  // new DB credentials, forcing pg_setup to create a clean database.
+  //
+  // This prevents:
+  //   1. New customers getting another customer's data
+  //   2. Setup wizard being skipped because old DB already has data
+  //   3. Wrong credentials from a previous install causing DB errors
+  if (fs.existsSync(envPath) && !fs.existsSync(versionFile)) {
+    console.log('[Desktop] Fresh install detected — removing stale .env to force clean DB setup');
+    try {
+      fs.unlinkSync(envPath);
+    } catch (e) {
+      console.warn('[Desktop] Could not remove stale .env:', e.message);
+    }
+  }
+
   if (!fs.existsSync(envPath)) {
     const secretKey = generateSecretKey();
     const content = [
@@ -554,28 +575,36 @@ function createMainWindow() {
 
   mainWindow.loadURL(BACKEND_URL);
 
-  // After load, check if this is the first launch after an update.
-  // If so, clear the Electron renderer cache so old JS/CSS is not used.
-  // Also always clear storage on startup to prevent stale cached assets
-  // from a previous version showing incorrect UI (e.g. PWA layout on desktop).
+  // After load, check if this is the first launch after an update OR a fresh install.
+  // Clear ALL caches and storage to ensure new JS/CSS is loaded and no stale
+  // state (e.g. PWA layout flags, old Zustand store data) persists.
   const versionFile = path.join(getDataDir(), 'last-known-version.txt');
   mainWindow.webContents.once('did-finish-load', () => {
     try {
       const lastVersion = fs.existsSync(versionFile)
         ? fs.readFileSync(versionFile, 'utf8').trim()
         : null;
+
       if (lastVersion !== APP_VERSION) {
-        // Version changed — clear ALL caches to ensure new JS/CSS is loaded
+        // Version changed OR fresh install — clear ALL caches + localStorage
+        // to prevent stale PWA layout, old Zustand store data, or cached JS
         if (mainWindow && !mainWindow.isDestroyed()) {
           const ses = mainWindow.webContents.session;
-          // Clear both HTTP cache and storage cache
           Promise.all([
             ses.clearCache(),
-            ses.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] }),
+            ses.clearStorageData({
+              storages: [
+                'cachestorage',
+                'serviceworkers',
+                'localstorage',   // clears Zustand stores — prevents stale PWA flags
+                'cookies',
+                'indexdb',
+              ],
+            }),
           ])
             .then(() => {
               fs.writeFileSync(versionFile, APP_VERSION, 'utf8');
-              console.log(`[Desktop] Full cache cleared after update ${lastVersion} → ${APP_VERSION}`);
+              console.log(`[Desktop] Full cache + storage cleared: ${lastVersion ?? 'fresh'} → ${APP_VERSION}`);
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.reload();
               }

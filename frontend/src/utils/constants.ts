@@ -1,5 +1,5 @@
 export const APP_NAME: string = 'POPMYC Retail POS';
-export const APP_VERSION: string = '1.2.0';
+export const APP_VERSION: string = '1.2.1';
 export const DEFAULT_CURRENCY: string = 'GHS';
 export const DEFAULT_CURRENCY_SYMBOL: string = 'GH₵';
 export const API_BASE_URL: string =
