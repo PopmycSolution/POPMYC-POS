@@ -145,8 +145,8 @@ def load_env(data_dir: Path) -> None:
         return
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=str(env_path), override=False)
-        log(f"Loaded .env from {env_path}")
+        load_dotenv(dotenv_path=str(env_path), override=True)
+        log(f"Loaded .env from {env_path} (env vars overridden)")
     except ImportError:
         # Fallback manual parser (python-dotenv must be in the venv)
         log("WARNING: python-dotenv not available — parsing .env manually")
@@ -161,6 +161,8 @@ def load_env(data_dir: Path) -> None:
                 value = value.strip().strip('"').strip("'")
                 if key and key not in os.environ:
                     os.environ[key] = value
+                elif key:
+                    os.environ[key] = value  # always override from .env
         log("Manual .env parsing complete")
 
 

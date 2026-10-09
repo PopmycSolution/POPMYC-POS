@@ -4,7 +4,22 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+# ── Load .env — data dir takes priority over backend dir ─────────────────────
+# The desktop launcher sets POPMYC_DATA_DIR; on Render it's not set.
+# Always use override=True so the .env file beats any stale NSSM env vars
+# that may have been baked in from a previous installation.
+_data_dir_env = os.environ.get("POPMYC_DATA_DIR", "").strip()
+_programdata  = os.environ.get("PROGRAMDATA") or os.environ.get("ProgramData", "")
+_data_env_path = None
+if _data_dir_env and _data_dir_env.upper().endswith("POPMYC POS"):
+    _data_env_path = Path(_data_dir_env) / ".env"
+elif _programdata:
+    _data_env_path = Path(_programdata) / "POPMYC POS" / ".env"
+
+if _data_env_path and _data_env_path.exists():
+    load_dotenv(dotenv_path=str(_data_env_path), override=True)
+else:
+    load_dotenv()  # fallback: load from backend dir (dev mode / Render)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

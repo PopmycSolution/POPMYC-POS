@@ -73,10 +73,10 @@ def load_desktop_env(data_dir: Path) -> None:
         print("[Launcher] Using default environment. Edit the .env to configure the database.")
         return
 
-    # Use python-dotenv to load into os.environ (override=False: existing vars win)
+    # Use python-dotenv to load into os.environ (override=True: .env always wins over stale NSSM env)
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=str(env_path), override=False)
+        load_dotenv(dotenv_path=str(env_path), override=True)
         print(f"[Launcher] Loaded .env from {env_path}")
     except ImportError:
         # Fallback: manual parser (python-dotenv must be present in the venv)
@@ -89,8 +89,8 @@ def load_desktop_env(data_dir: Path) -> None:
                 key, _, value = line.partition("=")
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
+                if key:
+                    os.environ[key] = value  # always override — .env is source of truth
 
 
 def run_management_command(command: list[str], description: str) -> bool:
