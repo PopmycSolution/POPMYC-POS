@@ -74,7 +74,7 @@ function LicenseRenewalModal({ onSuccess }: LicenseRenewalModalProps) {
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
+      style={{ background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(8px)' }}
     >
       <div
         className="w-full max-w-[400px] rounded-3xl overflow-hidden shadow-2xl animate-about-in"
@@ -180,6 +180,8 @@ export function LoginPage() {
   const [signingIn,  setSigningIn]  = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const [showRenew,  setShowRenew]  = useState(false);
+  // Store credentials so we can auto-login after license renewal
+  const [renewCredentials, setRenewCredentials] = useState<{ id: string; pwd: string; rememberMe: boolean } | null>(null);
 
   // ── submit: try local users first, fall back to server ──
   async function handleLogin(e: React.FormEvent) {
@@ -233,24 +235,6 @@ export function LoginPage() {
         authService.setTokens({ access: res.access, refresh: res.refresh });
         authService.setUser(u);
         setAuth({ user: u, accessToken: res.access, refreshToken: res.refresh });
-
-        // Check license status before navigating — show renewal modal if expired
-        try {
-          const licRes = await api.get<{ status?: string; license_type?: string }>(
-            '/licensing/licenses/status/',
-            { headers: { Authorization: `Bearer ${res.access}` } }
-          );
-          const licStatus = licRes.data?.status ?? '';
-          const licType   = licRes.data?.license_type ?? '';
-          if (licStatus === 'EXPIRED' && licType !== 'LIFETIME') {
-            setShowRenew(true);
-            setSigningIn(false);
-            return;
-          }
-        } catch {
-          // License check failed — let them through, middleware will block if needed
-        }
-
         navigate('/dashboard', { replace: true });
       } else {
         setError('Login failed. Please check your credentials.');
@@ -273,8 +257,20 @@ export function LoginPage() {
       const status = axiosErr.response?.status;
       const data   = axiosErr.response?.data;
 
+      // ── 402 = License expired — show red warning then renewal modal ──────────
+      if (status === 402) {
+        setError('⛔ Your license has expired. You cannot log in until it is renewed.');
+        // Store credentials so we can auto-login after renewal
+        setRenewCredentials({ id, pwd, rememberMe });
+        // After 4 seconds, show the renewal modal
+        setTimeout(() => {
+          setError(null);
+          setShowRenew(true);
+        }, 4000);
+        return;
+      }
+
       if (data) {
-        // Backend validation error — show the first meaningful message
         const msg =
           data.non_field_errors?.[0] ??
           data.detail ??
@@ -283,7 +279,6 @@ export function LoginPage() {
           'Invalid credentials. Please try again.';
         setError(msg);
       } else if (status === 0 || !axiosErr.response) {
-        // Network error — no response received
         setError('Cannot reach the server. Check your connection and try again.');
       } else {
         setError('Login failed. Please check your credentials.');
@@ -299,8 +294,30 @@ export function LoginPage() {
       {/* License renewal modal — blocks entry when license expired */}
       {showRenew && (
         <LicenseRenewalModal
-          onSuccess={() => {
+          onSuccess={async () => {
             setShowRenew(false);
+            // Auto re-login with stored credentials after successful renewal
+            if (renewCredentials) {
+              try {
+                const res = await authService.login({
+                  email: renewCredentials.id,
+                  password: renewCredentials.pwd,
+                  rememberMe: renewCredentials.rememberMe,
+                });
+                if (res?.access && res?.refresh && res?.user) {
+                  const rawRole = String(res.user.role ?? '').toUpperCase();
+                  const safeRole = isValidRole(rawRole) ? rawRole : 'CASHIER';
+                  const rawUser = res.user as User & { profile_picture_url?: string | null };
+                  const u: User = {
+                    ...rawUser, role: safeRole,
+                    avatarUrl: rawUser.avatarUrl ?? rawUser.profile_picture_url ?? null,
+                  };
+                  authService.setTokens({ access: res.access, refresh: res.refresh });
+                  authService.setUser(u);
+                  setAuth({ user: u, accessToken: res.access, refreshToken: res.refresh });
+                }
+              } catch { /* ignore — user can log in manually */ }
+            }
             navigate('/dashboard', { replace: true });
           }}
         />
