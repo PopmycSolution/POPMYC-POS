@@ -64,6 +64,7 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
   }
 
   html, body, #root {
@@ -78,6 +79,8 @@
   body {
     background-color: var(--bg-page);
     color: var(--text-primary);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: pan-y;
     @apply min-h-screen m-0 transition-colors duration-200;
   }
 

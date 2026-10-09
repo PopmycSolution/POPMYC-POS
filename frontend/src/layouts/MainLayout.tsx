@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import {
   LayoutDashboard, ShoppingCart, Package, Warehouse, Receipt, Truck,
   Users, Factory, FileText, BarChart3, Settings, UserCog, Menu, X,
-  ChevronDown, LogOut, User as UserIcon, Bell, Search, Tag,
+  ChevronDown, ChevronUp, LogOut, User as UserIcon, Bell, Search, Tag,
   AlertTriangle, ShieldOff, Home, TrendingUp, Clock, Shield,
   ClipboardList, Server, HardDrive, Bookmark, Ruler, Building2,
   Sun, Moon, ChevronRight, Zap, KeyRound, Camera, ArrowLeftRight,
@@ -568,6 +568,8 @@ export function PWALayout() {
     return () => obs.disconnect();
   }, []);
 
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout: storeLogout } = useAuthStore();
@@ -579,6 +581,15 @@ export function PWALayout() {
     }
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Scroll-to-top visibility
+  useEffect(() => {
+    function onScroll() {
+      setShowScrollTop(window.scrollY > 300);
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
   // Close profile dropdown on outside click
@@ -902,7 +913,8 @@ export function PWALayout() {
       {/* ── Fixed top bar ── */}
       <header style={{
         position: 'fixed', top: 0, left: 0, right: 0, zIndex: 50,
-        height: 56,
+        height: 'calc(56px + env(safe-area-inset-top, 0px))',
+        paddingTop: 'env(safe-area-inset-top, 0px)',
         background: '#ffffff',
         boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -922,7 +934,11 @@ export function PWALayout() {
         </button>
 
         {/* Brand */}
-        <span style={{ color: '#004D40', fontWeight: 700, fontSize: 16, letterSpacing: '0.02em' }}>
+        <span style={{
+          color: '#004D40', fontWeight: 700, fontSize: 16, letterSpacing: '0.02em',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          maxWidth: '120px',
+        }}>
           POPMYC POS
         </span>
 
@@ -1009,12 +1025,12 @@ export function PWALayout() {
       </header>
 
       {/* License banner just below top bar */}
-      <div ref={bannerRef} style={{ position: 'fixed', top: 56, left: 0, right: 0, zIndex: 49 }}>
+      <div ref={bannerRef} style={{ position: 'fixed', top: 'calc(56px + env(safe-area-inset-top, 0px))', left: 0, right: 0, zIndex: 49 }}>
         <LicenseExpiryBanner />
       </div>
 
       {/* ── Main content ── */}
-      <main style={{ paddingTop: 56 + bannerHeight, paddingBottom: 80, minHeight: '100vh' }}>
+      <main style={{ paddingTop: `calc(${56 + bannerHeight}px + env(safe-area-inset-top, 0px))`, paddingBottom: 80, minHeight: '100vh' }}>
         {(!user || routeAllowed) ? <Outlet /> : <AccessDenied roleName={roleConfig.label} />}
       </main>
 
@@ -1039,11 +1055,11 @@ export function PWALayout() {
                 onClick={() => tab.href && navigate(tab.href)}
                 style={{
                   background: '#00897B',
-                  border: 'none', cursor: 'pointer',
+                  border: '3px solid white', cursor: 'pointer',
                   width: 52, height: 52, borderRadius: '50%',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   transform: 'translateY(-16px)',
-                  boxShadow: '0 4px 16px rgba(0,137,123,0.45)',
+                  boxShadow: '0 4px 16px rgba(0,137,123,0.45), 0 0 0 2px rgba(0,137,123,0.25)',
                   flexShrink: 0,
                 }}
                 aria-label={tab.label}
@@ -1074,6 +1090,34 @@ export function PWALayout() {
           );
         })}
       </nav>
+
+      {/* ── Scroll-to-top button ── */}
+      <button
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        aria-label="Scroll to top"
+        style={{
+          position: 'fixed',
+          bottom: 90,
+          right: 16,
+          zIndex: 45,
+          width: 44,
+          height: 44,
+          borderRadius: '50%',
+          background: '#00897B',
+          border: 'none',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 2px 12px rgba(0,137,123,0.4)',
+          opacity: showScrollTop ? 1 : 0,
+          transform: showScrollTop ? 'translateY(0)' : 'translateY(8px)',
+          transition: 'opacity 0.25s ease, transform 0.25s ease',
+          pointerEvents: showScrollTop ? 'auto' : 'none',
+        }}
+      >
+        <ChevronUp style={{ width: 20, height: 20, color: '#ffffff' }} />
+      </button>
     </div>
   );
 }
