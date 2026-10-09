@@ -164,11 +164,15 @@ function ensureDesktopEnv(dataDir) {
 
   if (!fs.existsSync(envPath)) {
     const secretKey = generateSecretKey();
+    // Generate a unique DB name per installation so reinstalls never share data.
+    // Format: popmyc_<8 random hex chars> — unique, PostgreSQL-safe, easy to identify.
+    const uniqueSuffix = crypto.randomBytes(4).toString('hex');
+    const dbName = `popmyc_${uniqueSuffix}`;
     const content = [
       `# POPMYC POS Desktop Configuration`,
       `# Generated automatically on first run — ${new Date().toISOString()}`,
       `# DO NOT DELETE this file. It contains your database password.`,
-      `DB_NAME=popmyc_pos`,
+      `DB_NAME=${dbName}`,
       `DB_USER=postgres`,
       `DB_PASSWORD=changeme`,
       `DB_HOST=localhost`,
