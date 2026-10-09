@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   Mail, Lock, Eye, EyeOff,
   ShoppingCart, Package, Users, BarChart3, Shield, Wifi,
-  ArrowRight, Info, Phone, X, CheckCircle,
+  ArrowRight, Info, Phone, X, CheckCircle, KeyRound, Loader2, RefreshCw,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUserStore } from '@/stores/user.store';
 import * as authService from '@/services/auth.service';
+import api from '@/services/api';
 import type { User } from '@/types';
 import { isValidRole } from '@/utils/permissions';
 
@@ -25,6 +26,136 @@ const FEATURES = [
   { icon: Shield,       label: 'Secure &\nReliable'    },
   { icon: Wifi,         label: 'Offline\nSupport'      },
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// License Renewal Modal — shown when license is expired after login attempt
+// ─────────────────────────────────────────────────────────────────────────────
+interface LicenseRenewalModalProps {
+  onSuccess: () => void;
+}
+
+function LicenseRenewalModal({ onSuccess }: LicenseRenewalModalProps) {
+  const [code,     setCode]     = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
+  const [success,  setSuccess]  = useState(false);
+
+  async function handleRenew(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed) { setError('Please enter your license code.'); return; }
+
+    setLoading(true);
+    setError('');
+    try {
+      // Try renew first, fall back to activate
+      let res;
+      try {
+        res = await api.post('/licensing/licenses/renew/', { activation_code: trimmed });
+      } catch {
+        res = await api.post('/licensing/licenses/activate/', { activation_code: trimmed });
+      }
+      if (res.data) {
+        setSuccess(true);
+        setTimeout(() => onSuccess(), 1500);
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string; non_field_errors?: string[] } } };
+      setError(
+        e.response?.data?.detail ??
+        e.response?.data?.non_field_errors?.[0] ??
+        'Invalid code. Please check and try again.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
+    >
+      <div
+        className="w-full max-w-[400px] rounded-3xl overflow-hidden shadow-2xl animate-about-in"
+        style={{ background: '#1a1a2e' }}
+      >
+        {/* Icon area */}
+        <div className="flex flex-col items-center pt-10 pb-6 px-8">
+          <div
+            className="flex h-20 w-20 items-center justify-center rounded-2xl mb-6"
+            style={{ background: 'rgba(255,255,255,0.08)', border: '1.5px solid rgba(255,255,255,0.12)' }}
+          >
+            {success
+              ? <CheckCircle className="h-10 w-10 text-emerald-400" />
+              : <KeyRound className="h-10 w-10" style={{ color: '#4ECCA3' }} />}
+          </div>
+
+          <h2 className="text-2xl font-bold text-white text-center mb-2">
+            {success ? 'License Renewed!' : 'License Expired'}
+          </h2>
+          <p className="text-sm text-center leading-relaxed" style={{ color: 'rgba(255,255,255,0.55)' }}>
+            {success
+              ? 'Your license has been activated. Redirecting you in…'
+              : 'Your POPMYC POS license has expired. Enter your renewal code below to continue using the app.'}
+          </p>
+        </div>
+
+        {/* Form */}
+        {!success && (
+          <form onSubmit={handleRenew} className="px-8 pb-10 space-y-4">
+            {/* Code input */}
+            <div>
+              <input
+                type="text"
+                value={code}
+                onChange={(e) => { setCode(e.target.value.toUpperCase()); setError(''); }}
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+                className="w-full h-14 px-4 rounded-2xl text-sm font-mono text-center tracking-widest text-white placeholder:tracking-normal placeholder:font-sans outline-none transition-all"
+                style={{
+                  background: 'rgba(255,255,255,0.07)',
+                  border: error ? '1.5px solid #f87171' : '1.5px solid rgba(255,255,255,0.12)',
+                  caretColor: '#4ECCA3',
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = '#4ECCA3'; }}
+                onBlur={(e)  => { e.currentTarget.style.borderColor = error ? '#f87171' : 'rgba(255,255,255,0.12)'; }}
+                autoFocus
+                disabled={loading}
+              />
+              {error && (
+                <p className="mt-2 text-xs text-center text-red-400">{error}</p>
+              )}
+            </div>
+
+            {/* Activate button */}
+            <button
+              type="submit"
+              disabled={loading || !code.trim()}
+              className="w-full h-14 flex items-center justify-center gap-2 rounded-2xl font-bold text-sm transition-all disabled:opacity-50"
+              style={{ background: loading ? '#00695C' : '#00897B', color: '#fff' }}
+            >
+              {loading
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Activating…</>
+                : <><RefreshCw className="h-4 w-4" /> Activate License</>}
+            </button>
+
+            {/* Contact note */}
+            <p className="text-center text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              Need a renewal code?{' '}
+              <a
+                href="tel:0256251295"
+                className="underline underline-offset-2"
+                style={{ color: '#4ECCA3' }}
+              >
+                Call 0256251295
+              </a>
+            </p>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 export function LoginPage() {
@@ -48,6 +179,7 @@ export function LoginPage() {
   const [error,      setError]      = useState<string | null>(null);
   const [signingIn,  setSigningIn]  = useState(false);
   const [showForgot, setShowForgot] = useState(false);
+  const [showRenew,  setShowRenew]  = useState(false);
 
   // ── submit: try local users first, fall back to server ──
   async function handleLogin(e: React.FormEvent) {
@@ -92,7 +224,6 @@ export function LoginPage() {
       if (res?.access && res?.refresh && res?.user) {
         const rawRole  = String(res.user.role ?? '').toUpperCase();
         const safeRole = isValidRole(rawRole) ? rawRole : 'CASHIER';
-        // Map backend snake_case profile_picture_url → frontend avatarUrl
         const rawUser  = res.user as User & { profile_picture_url?: string | null };
         const u: User  = {
           ...rawUser,
@@ -102,6 +233,24 @@ export function LoginPage() {
         authService.setTokens({ access: res.access, refresh: res.refresh });
         authService.setUser(u);
         setAuth({ user: u, accessToken: res.access, refreshToken: res.refresh });
+
+        // Check license status before navigating — show renewal modal if expired
+        try {
+          const licRes = await api.get<{ status?: string; license_type?: string }>(
+            '/licensing/licenses/status/',
+            { headers: { Authorization: `Bearer ${res.access}` } }
+          );
+          const licStatus = licRes.data?.status ?? '';
+          const licType   = licRes.data?.license_type ?? '';
+          if (licStatus === 'EXPIRED' && licType !== 'LIFETIME') {
+            setShowRenew(true);
+            setSigningIn(false);
+            return;
+          }
+        } catch {
+          // License check failed — let them through, middleware will block if needed
+        }
+
         navigate('/dashboard', { replace: true });
       } else {
         setError('Login failed. Please check your credentials.');
@@ -146,6 +295,16 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen flex overflow-hidden" style={{ background: '#f0faf8' }}>
+
+      {/* License renewal modal — blocks entry when license expired */}
+      {showRenew && (
+        <LicenseRenewalModal
+          onSuccess={() => {
+            setShowRenew(false);
+            navigate('/dashboard', { replace: true });
+          }}
+        />
+      )}
 
       {/* ══════════════════════════════════════════════════════════════
           LEFT PANEL — General.png background, text top, image bottom
