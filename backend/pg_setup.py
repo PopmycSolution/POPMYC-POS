@@ -666,12 +666,20 @@ def _create_database(host: str, port: int, admin_user: str, admin_password: str,
         safe_db   = db_name.replace('"', '')
         safe_user = app_user.replace('"', '') if app_user else ""
 
-        # ── Step 1: Create the application user if it doesn't exist ──────────
+        # ── Step 1: Create or update the application user ────────────────────
         if safe_user and safe_user != admin_user:
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (safe_user,))
-            if not cur.fetchone():
+            user_exists = bool(cur.fetchone())
+            if not user_exists:
                 cur.execute(
                     f'CREATE USER "{safe_user}" WITH PASSWORD %s LOGIN',
+                    (app_password,),
+                )
+            else:
+                # User exists (leftover from previous install) — update password
+                # so the new .env credentials match PostgreSQL
+                cur.execute(
+                    f'ALTER USER "{safe_user}" WITH PASSWORD %s',
                     (app_password,),
                 )
 

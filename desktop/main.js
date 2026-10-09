@@ -940,33 +940,20 @@ async function continueStartupAfterDb() {
                     msg.includes('did not start');
 
     // ── If it's a DB error, show the DB setup screen instead of dying ────────
-    // This handles the case where PostgreSQL was reinstalled fresh and the
-    // old .env credentials (user/password/dbname) no longer exist.
+    // This handles: stale credentials, fresh PostgreSQL reinstall, migration failure
     if (isDbErr) {
-      console.log('[Desktop] DB connection failed — deleting stale .env and showing DB setup screen');
-      // Delete stale .env so fresh credentials are generated
-      const envPath = path.join(dataDir, '.env');
-      try { fs.unlinkSync(envPath); } catch { /* already gone */ }
-      // Delete version file so localStorage is cleared on next successful start
-      const versionFile = path.join(dataDir, 'last-known-version.txt');
-      try { fs.unlinkSync(versionFile); } catch { /* already gone */ }
-
+      console.log('[Desktop] DB connection failed — showing DB setup screen for re-provisioning');
       stopBackend();
-      // Show DB setup screen — user can enter fresh PostgreSQL credentials
+
+      // Re-run pg_setup check to get the current state so the setup screen
+      // shows the right message (DB_NOT_FOUND vs AUTH_FAILED vs PG_NOT_RUNNING)
+      const recheckResult = await runPgScript('check', dataDir);
+      console.log('[Desktop] Recheck after failure:', recheckResult.error_code ?? recheckResult.message);
+
       createDbSetupWindow();
       if (dbSetupWindow) {
         dbSetupWindow.webContents.on('did-finish-load', () => {
-          dbSetupWindow?.webContents.send('pg:checkResult', {
-            success: false,
-            action: 'check',
-            pg_installed: true,
-            pg_running: true,
-            db_exists: false,
-            db_accessible: false,
-            error_code: 'DB_NOT_FOUND',
-            next_step: 'enter_credentials',
-            message: 'Database credentials are invalid or the database does not exist. Please set up the database again.',
-          });
+          dbSetupWindow?.webContents.send('pg:checkResult', recheckResult);
         });
       }
       return;
