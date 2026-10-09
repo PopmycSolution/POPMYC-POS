@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation, useNavigate, Link } from 'react-router-dom';
 import { type ReactNode, useEffect, useState } from 'react';
 import MainLayout from '@/layouts/MainLayout';
+import { PWALayout } from '@/layouts/MainLayout';
 import LoginPage from '@/pages/auth/LoginPage';
 import SetupWizard from '@/pages/setup/SetupWizard';
 import DbSetupScreen from '@/pages/setup/DbSetupScreen';
@@ -242,7 +243,7 @@ export function App() {
         path="/"
         element={
           <SetupGuard>
-            <RequireAuth><MainLayout /></RequireAuth>
+            <RequireAuth>{IS_PWA ? <PWALayout /> : <MainLayout />}</RequireAuth>
           </SetupGuard>
         }
       >

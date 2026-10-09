@@ -9,7 +9,7 @@ import {
   Sun, Moon, ChevronRight, Zap, KeyRound, Camera, ArrowLeftRight,
   CalendarClock, XCircle, RefreshCw,
 } from 'lucide-react';
-import { IS_PWA, APP_VERSION } from '@/utils/constants';
+import { APP_VERSION } from '@/utils/constants';
 import { Avatar } from '@/components/ui/Avatar';
 import { BranchSwitcher } from '@/components/branches/BranchSwitcher';
 import { HelpBot } from '@/components/help/HelpBot';
@@ -546,9 +546,9 @@ function HeaderIconBtn({
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// PWA LAYOUT — renders only when IS_PWA === true
+// PWA LAYOUT — separate mobile layout, only rendered by App.tsx when IS_PWA === true
 // ═══════════════════════════════════════════════════════════════════
-function PWALayout() {
+export function PWALayout() {
   const [drawerOpen,      setDrawerOpen]      = useState(false);
   const [profileOpen,     setProfileOpen]     = useState(false);
   const [changePwdOpen,   setChangePwdOpen]   = useState(false);
@@ -1082,8 +1082,6 @@ function PWALayout() {
 // Main layout
 // ─────────────────────────────────────────────────────────────────────────────
 export function MainLayout() {
-  if (IS_PWA) return <PWALayout />;
-
   const [sidebarOpen,   setSidebarOpen]   = useState(false);
   const [userMenuOpen,  setUserMenuOpen]  = useState(false);
   const [notifOpen,     setNotifOpen]     = useState(false);
