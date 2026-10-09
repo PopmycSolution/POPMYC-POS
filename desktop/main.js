@@ -345,7 +345,10 @@ let usingWindowsService = false;
 async function startBackend(dataDir) {
   const backendDir = getBackendDir();
   const pythonPath = getPythonPath();
-  const envPath    = ensureDesktopEnv(dataDir);
+  // Do NOT call ensureDesktopEnv here — it was already called at startup
+  // before pg_setup ran. Calling it again would delete the .env that
+  // pg_setup create just wrote with the real popmyc_app credentials.
+  const envPath    = path.join(dataDir, '.env');
 
   // ── Production: try Windows service first ─────────────────────────────────
   if (!IS_DEV) {
