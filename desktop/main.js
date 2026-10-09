@@ -38,7 +38,7 @@ const BACKEND_PORT    = parseInt(process.env.POPMYC_PORT || '8000', 10);
 const BACKEND_HOST    = '127.0.0.1';
 const BACKEND_URL     = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const HEALTH_URL      = `${BACKEND_URL}/api/v1/health/`;
-const HEALTH_TIMEOUT  = 180;   // seconds — generous timeout for cold-start migrations on slow hardware
+const HEALTH_TIMEOUT  = 60;   // seconds — if backend doesn't start in 60s, show DB setup screen
 const HEALTH_INTERVAL = 1000;  // ms
 const IS_DEV          = process.argv.includes('--dev') || !app.isPackaged;
 
@@ -927,21 +927,54 @@ async function continueStartupAfterDb() {
   const dataDir = getDataDir();
   try {
     await startBackend(dataDir);
-await waitForBackend();
-createMainWindow();
-startupInProgress = false;
+    await waitForBackend();
+    createMainWindow();
+    startupInProgress = false;
   } catch (err) {
     if (splashWindow) splashWindow.close();
-    const isDbErr = err.message && (
-      err.message.toLowerCase().includes('postgresql') ||
-      err.message.toLowerCase().includes('database') ||
-      err.message.includes('psycopg')
-    );
+
+    const msg = err.message || '';
+    const isDbErr = msg.toLowerCase().includes('postgresql') ||
+                    msg.toLowerCase().includes('database') ||
+                    msg.includes('psycopg') ||
+                    msg.includes('did not start');
+
+    // ── If it's a DB error, show the DB setup screen instead of dying ────────
+    // This handles the case where PostgreSQL was reinstalled fresh and the
+    // old .env credentials (user/password/dbname) no longer exist.
+    if (isDbErr) {
+      console.log('[Desktop] DB connection failed — deleting stale .env and showing DB setup screen');
+      // Delete stale .env so fresh credentials are generated
+      const envPath = path.join(dataDir, '.env');
+      try { fs.unlinkSync(envPath); } catch { /* already gone */ }
+      // Delete version file so localStorage is cleared on next successful start
+      const versionFile = path.join(dataDir, 'last-known-version.txt');
+      try { fs.unlinkSync(versionFile); } catch { /* already gone */ }
+
+      stopBackend();
+      // Show DB setup screen — user can enter fresh PostgreSQL credentials
+      createDbSetupWindow();
+      if (dbSetupWindow) {
+        dbSetupWindow.webContents.on('did-finish-load', () => {
+          dbSetupWindow?.webContents.send('pg:checkResult', {
+            success: false,
+            action: 'check',
+            pg_installed: true,
+            pg_running: true,
+            db_exists: false,
+            db_accessible: false,
+            error_code: 'DB_NOT_FOUND',
+            next_step: 'enter_credentials',
+            message: 'Database credentials are invalid or the database does not exist. Please set up the database again.',
+          });
+        });
+      }
+      return;
+    }
+
     dialog.showErrorBox(
-      isDbErr ? `${APP_NAME} — Database Error` : `${APP_NAME} — Startup Error`,
-      isDbErr
-        ? `Cannot connect to the database.\n\n${err.message}\n\nEnsure PostgreSQL is running and restart.`
-        : `The application could not start.\n\n${err.message}`
+      `${APP_NAME} — Startup Error`,
+      `The application could not start.\n\n${msg}`
     );
     stopBackend();
     app.quit();
