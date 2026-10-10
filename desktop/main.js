@@ -38,7 +38,7 @@ const BACKEND_PORT    = parseInt(process.env.POPMYC_PORT || '8000', 10);
 const BACKEND_HOST    = '127.0.0.1';
 const BACKEND_URL     = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 const HEALTH_URL      = `${BACKEND_URL}/api/v1/health/`;
-const HEALTH_TIMEOUT  = 60;   // seconds — if backend doesn't start in 60s, show DB setup screen
+const HEALTH_TIMEOUT  = 200;   // seconds — generous for fresh PG install + 72 migrations
 const HEALTH_INTERVAL = 1000;  // ms
 const IS_DEV          = process.argv.includes('--dev') || !app.isPackaged;
 
@@ -566,23 +566,47 @@ function createMainWindow() {
   });
   if (!IS_DEV) Menu.setApplicationMenu(null);
 
-  mainWindow.once('ready-to-show', () => {
+  // ── Window visibility ─────────────────────────────────────────────────────
+  function _showMainWindowWhenReady() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isVisible()) return; // already shown
+    if (dbSetupWindow && !dbSetupWindow.isDestroyed()) {
+      dbSetupWindow.close();
+      dbSetupWindow = null;
+    }
     if (splashWindow) splashWindow.close();
     mainWindow.show();
     mainWindow.focus();
     if (IS_DEV) mainWindow.webContents.openDevTools();
-    // Non-blocking update check after window shows
     scheduleUpdateCheck();
+  }
+
+  // ready-to-show fires after the first paint. We show the window here
+  // directly — the storage-clear + reload happens AFTER this (triggered by
+  // did-finish-load), and the window is already show:false so the user won't
+  // see the pre-cleared page because Electron doesn't paint until show() is
+  // called. The brief pre-clear page is invisible; the reload then replaces it.
+  mainWindow.once('ready-to-show', () => {
+    _showMainWindowWhenReady();
   });
 
   // Re-broadcast current update state once the page has fully loaded.
   // Also re-show the "available" dialog if there was a pending update from
   // a previous interrupted session (power loss, network error).
+  // On a fresh install / version change this also fires after the storage-clear
+  // reload — that's the point where we show the main window (so React only
+  // bootstraps on guaranteed-clean storage).
   mainWindow.webContents.on('did-finish-load', () => {
     broadcastUpdateState();
-    // If we loaded a persisted pending update, show the dialog again
     if (updateState === 'available' && updateInfo?.version && mainWindow) {
       setTimeout(() => showAvailableDialog(updateInfo), 2000);
+    }
+    // After the storage-clear reload completes, close the DB setup window now
+    // that the main window is running with clean storage. The main window is
+    // already visible (ready-to-show fired on the first load above).
+    if (_storageCleared && dbSetupWindow && !dbSetupWindow.isDestroyed()) {
+      dbSetupWindow.close();
+      dbSetupWindow = null;
     }
   });
 
@@ -601,48 +625,72 @@ function createMainWindow() {
 
   mainWindow.loadURL(BACKEND_URL);
 
-  // After load, check if this is the first launch after an update OR a fresh install.
-  // Clear ALL caches and storage to ensure new JS/CSS is loaded and no stale
-  // state (e.g. PWA layout flags, old Zustand store data) persists.
+  // ── Version / cache management on first load ──────────────────────────────
+  //
+  // Goal: ensure the React app always boots against a clean storage slate so
+  // stale auth tokens never cause SetupGuard to skip the Setup Wizard on a
+  // fresh-DB install.
+  //
+  // Three cases:
+  //   A. Fresh install (last-known-version.txt missing):
+  //      Clear everything → write version file → reload.
+  //   B. Version upgrade (file exists, version differs):
+  //      Same as A.
+  //   C. Same version (normal re-launch):
+  //      Clear only localStorage + indexdb → reload so React only bootstraps
+  //      after the clear is guaranteed complete. A flag prevents a second
+  //      reload when the page comes back up after this targeted clear.
+  //
+  // The flag is stored in sessionStorage (survives the programmatic reload
+  // but is reset on a full app restart), keeping the logic entirely in-process.
   const versionFile = path.join(getDataDir(), 'last-known-version.txt');
+
+  // We use a module-level boolean rather than sessionStorage because we are in
+  // the main process and cannot read renderer sessionStorage directly. The flag
+  // resets automatically when createMainWindow() is called again (new session).
+  let _storageCleared = false;
+
   mainWindow.webContents.once('did-finish-load', () => {
+    // Second load after our own programmatic reload — skip to avoid loop.
+    if (_storageCleared) return;
+
     try {
       const lastVersion = fs.existsSync(versionFile)
         ? fs.readFileSync(versionFile, 'utf8').trim()
         : null;
 
       if (lastVersion !== APP_VERSION) {
-        // Version changed OR fresh install — clear ALL caches + localStorage
+        // ── Case A / B: version change or fresh install ───────────────────
+        // Clear ALL caches and storage, write the version file, then reload.
         if (mainWindow && !mainWindow.isDestroyed()) {
           const ses = mainWindow.webContents.session;
           Promise.all([
             ses.clearCache(),
             ses.clearStorageData({
-              storages: [
-                'cachestorage',
-                'serviceworkers',
-                'localstorage',
-                'cookies',
-                'indexdb',
-              ],
+              storages: ['cachestorage', 'serviceworkers', 'localstorage', 'cookies', 'indexdb'],
             }),
           ])
             .then(() => {
               fs.writeFileSync(versionFile, APP_VERSION, 'utf8');
               console.log(`[Desktop] Full cache + storage cleared: ${lastVersion ?? 'fresh'} → ${APP_VERSION}`);
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.reload();
-              }
+              _storageCleared = true;
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
             })
             .catch(() => {});
         }
       } else {
-        // Same version — but still clear localStorage to remove stale auth
-        // tokens that might skip the Setup Wizard on a fresh DB install.
-        // This is safe — the auth store re-hydrates from the backend on login.
+        // ── Case C: same version ──────────────────────────────────────────
+        // Clear only localStorage + indexdb to remove any stale auth tokens
+        // that could make SetupGuard skip the Setup Wizard on a fresh DB.
+        // Reload AFTER the clear so React only bootstraps on clean storage.
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.session
             .clearStorageData({ storages: ['localstorage', 'indexdb'] })
+            .then(() => {
+              console.log('[Desktop] localStorage + indexdb cleared (same version)');
+              _storageCleared = true;
+              if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+            })
             .catch(() => {});
         }
       }
@@ -861,11 +909,16 @@ ipcMain.handle('pg:create', async (_, pgPassword) => {
   return runPgScript('create', dataDir, pgPassword);
 });
 
-// Once DB setup is done, signal main.js to continue the full startup
+// Once DB setup is done, signal main.js to continue the full startup.
+// We keep the DB setup window open (showing a spinner) while the backend
+// starts — closing it blank causes a visible black gap on slow machines.
+// The window is closed in createMainWindow()'s ready-to-show handler once
+// the main window is actually visible.
 ipcMain.handle('pg:setupComplete', async () => {
-  if (dbSetupWindow) {
-    dbSetupWindow.close();
-    dbSetupWindow = null;
+  // Tell the DB setup window to switch to the "Starting POPMYC POS…" screen
+  // so the user sees progress rather than a sudden blank window.
+  if (dbSetupWindow && !dbSetupWindow.isDestroyed()) {
+    dbSetupWindow.webContents.send('db:showStarting');
   }
   await continueStartupAfterDb();
   return { ok: true };
@@ -954,6 +1007,7 @@ ipcMain.handle('service:isUsingWindowsService', () => usingWindowsService);
 // ── Core startup ──────────────────────────────────────────────────────────────
 
 async function continueStartupAfterDb() {
+  shutdownRequested = false;
   const dataDir = getDataDir();
   try {
     await startBackend(dataDir);
@@ -962,36 +1016,10 @@ async function continueStartupAfterDb() {
     startupInProgress = false;
   } catch (err) {
     if (splashWindow) splashWindow.close();
-
     const msg = err.message || '';
-    const isDbErr = msg.toLowerCase().includes('postgresql') ||
-                    msg.toLowerCase().includes('database') ||
-                    msg.includes('psycopg') ||
-                    msg.includes('did not start');
-
-    // ── If it's a DB error, show the DB setup screen instead of dying ────────
-    // This handles: stale credentials, fresh PostgreSQL reinstall, migration failure
-    if (isDbErr) {
-      console.log('[Desktop] DB connection failed — showing DB setup screen for re-provisioning');
-      stopBackend();
-
-      // Re-run pg_setup check to get the current state so the setup screen
-      // shows the right message (DB_NOT_FOUND vs AUTH_FAILED vs PG_NOT_RUNNING)
-      const recheckResult = await runPgScript('check', dataDir);
-      console.log('[Desktop] Recheck after failure:', recheckResult.error_code ?? recheckResult.message);
-
-      createDbSetupWindow();
-      if (dbSetupWindow) {
-        dbSetupWindow.webContents.on('did-finish-load', () => {
-          dbSetupWindow?.webContents.send('pg:checkResult', recheckResult);
-        });
-      }
-      return;
-    }
-
     dialog.showErrorBox(
       `${APP_NAME} — Startup Error`,
-      `The application could not start.\n\n${msg}`
+      `The application could not start.\n\n${msg}\n\nPlease restart POPMYC POS.\n\nIf this keeps happening contact support:\n0256251295 / popmychubsolution@gmail.com`
     );
     stopBackend();
     app.quit();
@@ -1020,29 +1048,40 @@ app.whenReady().then(async () => {
   const dataDir = ensureDataDir();
   await ensureDesktopEnv(dataDir);
 
-  // ── Step 1: PostgreSQL check ───────────────────────────────────────────────
+  // ── PostgreSQL auto-provision ─────────────────────────────────────────────
+  // The installer already set up PostgreSQL and created the database.
+  // On rare cases where the .env still has placeholder credentials
+  // (e.g. service started before installer finished), auto-run pg_setup
+  // create silently — no password screen, no user interaction needed.
+  // pg_setup detects the running PostgreSQL port and uses the bundled
+  // postgres superuser password if available.
   const pgResult = await runPgScript('check', dataDir);
-  console.log('[Desktop] PG check:', pgResult.error_code ?? 'OK');
+  console.log('[Desktop] PG check:', pgResult.error_code ?? 'OK', '| port:', pgResult.pg_port);
 
-if (pgResult.success) {
-    // DB ready — proceed directly
-    await continueStartupAfterDb();
-    return;
-}
+  if (!pgResult.success) {
+    console.log('[Desktop] DB not ready, attempting silent auto-provision...');
+    // Try to run pg_setup create with a password-file if the installer left one
+    const pgPwdFile = path.join(dataDir, '.pg_super_pwd');
+    if (fs.existsSync(pgPwdFile)) {
+      const python = getPythonPath();
+      const backendDir = getBackendDir();
+      await new Promise((resolve) => {
+        const proc = require('child_process').spawn(
+          python,
+          [path.join(backendDir, 'pg_setup.py'), '--action', 'create',
+           '--data-dir', dataDir, '--password-file', pgPwdFile],
+          { cwd: backendDir, windowsHide: true, stdio: 'ignore' }
+        );
+        proc.on('close', resolve);
+        proc.on('error', resolve);
+      });
+      try { fs.unlinkSync(pgPwdFile); } catch { /* already gone */ }
+      console.log('[Desktop] Silent auto-provision complete');
+    }
+  }
 
-// DB not ready — open the local setup screen immediately.
-// Do NOT try to start Django here — it will fail/hang if the DB doesn't exist.
-if (splashWindow) splashWindow.close();
-
-// Open a small window that loads the LOCAL db-setup.html (no Django needed)
-createDbSetupWindow();
-
-// Push the PG check result to the page once it finishes loading
-if (dbSetupWindow) {
-    dbSetupWindow.webContents.on('did-finish-load', () => {
-        dbSetupWindow?.webContents.send('pg:checkResult', pgResult);
-    });
-}
+  // ── Start backend regardless — service_launcher handles PG wait/retry ─────
+  await continueStartupAfterDb();
 });
 app.on('window-all-closed', () => {
   // Do not shut down the backend while Electron is still starting.

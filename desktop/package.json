@@ -1,6 +1,6 @@
 {
   "name": "popmyc-pos-desktop",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "POPMYC POS Desktop Application",
   "author": "POPMyC Solutions <popmychubsolution@gmail.com>",
   "main": "main.js",

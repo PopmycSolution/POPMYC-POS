@@ -32,7 +32,7 @@
 ; Service name:      POPMYCBackend
 
 #define AppName       "POPMYC POS"
-#define AppVersion    "1.3.0"
+#define AppVersion    "1.3.1"
 #define AppPublisher  "POPMyC Solutions"
 #define AppExeName    "POPMYC POS.exe"
 #define AppURL        "https://popmycsolutions.com"
@@ -1134,6 +1134,10 @@ begin
   // Written to a file so we can pass it to pg_setup.py without a cmd.exe pipe,
   // avoiding the quoting fragility of "type file | python" for paths with spaces.
   SaveStringToFile(ExpandConstant('{tmp}\popmyc_pg_super.tmp'), PgSuperPwd, False);
+
+  // Also save to ProgramData so Electron can auto-provision on first launch
+  // if the service started before pg_setup create finished.
+  SaveStringToFile(GetDataDir() + '\.pg_super_pwd', PgSuperPwd, False);
 
   // Run EDB installer with DEDICATED POPMYC paths — existing postgresql-x64-16
   // installation is completely untouched.

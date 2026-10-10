@@ -55,7 +55,7 @@ from pathlib import Path
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 SERVICE_NAME      = "POPMYCBackend"
-PG_RETRY_COUNT    = 18        # attempts — 18 × 5s = 90s max wait, safely under Electron's 180s deadline
+PG_RETRY_COUNT    = 36        # attempts — 36 × 5s = 180s max wait (generous for fresh PG install)
 PG_RETRY_DELAY    = 5.0       # seconds between attempts
 LOG_PREFIX        = "[POPMYC Service]"
 
