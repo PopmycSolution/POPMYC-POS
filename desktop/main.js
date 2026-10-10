@@ -144,21 +144,20 @@ async function ensureDesktopEnv(dataDir) {
   const versionFile = path.join(dataDir, 'last-known-version.txt');
 
   // ── Fresh install detection ────────────────────────────────────────────────
-  // If .env exists BUT last-known-version.txt does NOT exist, this is a
-  // reinstall over a previous installation (the installer doesn't wipe
-  // ProgramData). Delete the stale .env so a fresh one is generated with
-  // new DB credentials, forcing pg_setup to create a clean database.
-  //
-  // This prevents:
-  //   1. New customers getting another customer's data
-  //   2. Setup wizard being skipped because old DB already has data
-  //   3. Wrong credentials from a previous install causing DB errors
+  // Only delete the .env if it has placeholder credentials (postgres/changeme).
+  // If the installer already wrote real popmyc_app credentials, preserve them.
   if (fs.existsSync(envPath) && !fs.existsSync(versionFile)) {
-    console.log('[Desktop] Fresh install detected — removing stale .env to force clean DB setup');
     try {
-      fs.unlinkSync(envPath);
+      const envContent = fs.readFileSync(envPath, 'utf8');
+      const isPlaceholder = envContent.includes('DB_USER=postgres') && envContent.includes('DB_PASSWORD=changeme');
+      if (isPlaceholder) {
+        console.log('[Desktop] Fresh install with placeholder .env — keeping for pg_setup to fill');
+        // Do NOT delete — the startup flow will run pg_setup create silently
+      } else {
+        console.log('[Desktop] Fresh install with real credentials — preserving .env');
+      }
     } catch (e) {
-      console.warn('[Desktop] Could not remove stale .env:', e.message);
+      console.warn('[Desktop] Could not read .env:', e.message);
     }
   }
 
@@ -1048,19 +1047,18 @@ app.whenReady().then(async () => {
   const dataDir = ensureDataDir();
   await ensureDesktopEnv(dataDir);
 
-  // ── PostgreSQL auto-provision ─────────────────────────────────────────────
-  // The installer already set up PostgreSQL and created the database.
-  // On rare cases where the .env still has placeholder credentials
-  // (e.g. service started before installer finished), auto-run pg_setup
-  // create silently — no password screen, no user interaction needed.
-  // pg_setup detects the running PostgreSQL port and uses the bundled
-  // postgres superuser password if available.
-  const pgResult = await runPgScript('check', dataDir);
-  console.log('[Desktop] PG check:', pgResult.error_code ?? 'OK', '| port:', pgResult.pg_port);
+  // ── Auto-provision DB if .env still has placeholder credentials ───────────
+  // The installer saves the postgres superuser password to .pg_super_pwd.
+  // If the service started before pg_setup create finished (race condition),
+  // the .env may still have postgres/changeme. Fix it silently here BEFORE
+  // starting the service so the service always gets real credentials.
+  const envPath = path.join(dataDir, '.env');
+  let envContent = '';
+  try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { /* noop */ }
+  const isPlaceholder = envContent.includes('DB_USER=postgres') && envContent.includes('DB_PASSWORD=changeme');
 
-  if (!pgResult.success) {
-    console.log('[Desktop] DB not ready, attempting silent auto-provision...');
-    // Try to run pg_setup create with a password-file if the installer left one
+  if (isPlaceholder) {
+    console.log('[Desktop] Placeholder credentials detected — running silent auto-provision...');
     const pgPwdFile = path.join(dataDir, '.pg_super_pwd');
     if (fs.existsSync(pgPwdFile)) {
       const python = getPythonPath();
@@ -1075,12 +1073,20 @@ app.whenReady().then(async () => {
         proc.on('close', resolve);
         proc.on('error', resolve);
       });
-      try { fs.unlinkSync(pgPwdFile); } catch { /* already gone */ }
-      console.log('[Desktop] Silent auto-provision complete');
+      // Do NOT delete .pg_super_pwd yet — keep it for retry on next launch
+      const newEnv = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+      if (newEnv.includes('DB_USER=popmyc_app')) {
+        console.log('[Desktop] Auto-provision succeeded — credentials updated');
+        try { fs.unlinkSync(pgPwdFile); } catch { /* noop */ }
+      } else {
+        console.log('[Desktop] Auto-provision may have partially failed — will retry on next start');
+      }
+    } else {
+      console.log('[Desktop] No .pg_super_pwd found — cannot auto-provision');
     }
   }
 
-  // ── Start backend regardless — service_launcher handles PG wait/retry ─────
+  // ── Start backend ─────────────────────────────────────────────────────────
   await continueStartupAfterDb();
 });
 app.on('window-all-closed', () => {
