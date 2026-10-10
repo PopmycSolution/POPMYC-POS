@@ -32,7 +32,7 @@
 ; Service name:      POPMYCBackend
 
 #define AppName       "POPMYC POS"
-#define AppVersion    "1.2.7"
+#define AppVersion    "1.3.0"
 #define AppPublisher  "POPMyC Solutions"
 #define AppExeName    "POPMYC POS.exe"
 #define AppURL        "https://popmycsolutions.com"
@@ -1428,44 +1428,30 @@ begin
     ssPostInstall:
     begin
       CreateCustomerDataDirectory();
-      // ── PostgreSQL requirement check ───────────────────────────────────────
-      // NEW DEPLOYMENT MODEL (manual PostgreSQL):
-      // The operator installs PostgreSQL manually BEFORE running this installer.
-      // POPMYC POS does NOT install PostgreSQL automatically.
-      // If PostgreSQL is not detected, stop the installation with a clear message.
-      //
-      // The operator must:
-      //   1. Install PostgreSQL 16 (official EDB installer).
-      //   2. Set the postgres administrator password.
-      //   3. Ensure the PostgreSQL service is running.
-      //   4. Then run this installer.
-      //
-      // After POPMYC POS is installed, on first launch the Database Setup screen
-      // will ask the operator for the PostgreSQL administrator password once.
-      // POPMYC will create popmyc_pos / popmyc_app automatically from that password.
-      //
-      // NOTE: InstallPostgreSQLSilent(), CreatePopmycClusterDirectly(),
-      //       FindPgBinDir(), and CreatePopmycDatabase() are retained in this
-      //       file for future use but are NOT called during normal installation.
-      if not IsPostgreSQLInstalled() then begin
-        Log('PostgreSQL not detected — aborting installation.');
-        MsgBox(
-          'POPMYC POS requires PostgreSQL to be installed first.' + #13#10 + #13#10 +
-          'PostgreSQL was not detected on this computer.' + #13#10 + #13#10 +
-          'Before installing POPMYC POS, please:' + #13#10 +
-          '  1. Download and install PostgreSQL 16 from:' + #13#10 +
-          '     https://www.postgresql.org/download/windows/' + #13#10 +
-          '  2. Set the postgres administrator password.' + #13#10 +
-          '  3. Ensure the PostgreSQL service is running.' + #13#10 +
-          '  4. Run this installer again.' + #13#10 + #13#10 +
-          'The installer will now exit.',
-          mbError, MB_OK
-        );
-        Exit;
+      // ── PostgreSQL: install silently if not present, reuse if present ──────
+      // If PostgreSQL is already installed and working, reuse it.
+      // If not installed, run the bundled EDB installer silently — no password
+      // screen, no manual steps. Customer never needs to install PG separately.
+      if IsPostgreSQLInstalled() then begin
+        Log('PostgreSQL already installed — reusing existing instance.');
+        // Database provisioning done by CreatePopmycDatabase() below
+      end else begin
+        Log('PostgreSQL not found — installing bundled PostgreSQL silently...');
+        if not InstallPostgreSQLSilent() then begin
+          Log('PostgreSQL silent install failed — installation cannot continue.');
+          MsgBox(
+            'POPMYC POS Setup Error' + #13#10 + #13#10 +
+            'Could not install the PostgreSQL database engine.' + #13#10 + #13#10 +
+            'Please run this installer from an Administrator account.' + #13#10 + #13#10 +
+            'Contact support: 0256251295 / popmychubsolution@gmail.com',
+            mbError, MB_OK
+          );
+          Exit;
+        end;
       end;
-      Log('PostgreSQL detected — proceeding with POPMYC POS installation.');
-      // Database provisioning (popmyc_pos / popmyc_app) is performed on first
-      // launch via the POPMYC Database Setup screen.
+      // Create POPMYC database and application user (idempotent — safe on reinstall)
+      CreatePopmycDatabase();
+      Log('PostgreSQL setup complete — proceeding with POPMYC POS installation.');
       InstallWindowsService();
     end;
 
