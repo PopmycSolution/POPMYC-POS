@@ -32,7 +32,7 @@
 ; Service name:      POPMYCBackend
 
 #define AppName       "POPMYC POS"
-#define AppVersion    "1.3.2"
+#define AppVersion    "1.3.3"
 #define AppPublisher  "POPMyC Solutions"
 #define AppExeName    "POPMYC POS.exe"
 #define AppURL        "https://popmycsolutions.com"
@@ -1292,6 +1292,25 @@ begin
 end;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Check if .env has real popmyc_app credentials (not placeholder)
+// ─────────────────────────────────────────────────────────────────────────────
+function EnvHasRealCredentials(DataDir: String): Boolean;
+var
+  EnvLines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  if LoadStringsFromFile(DataDir + '\.env', EnvLines) then begin
+    for I := 0 to High(EnvLines) do begin
+      if Pos('DB_USER=popmyc_app', EnvLines[I]) = 1 then begin
+        Result := True;
+        Break;
+      end;
+    end;
+  end;
+end;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Create POPMYC database and application user after PG is ready
 // ─────────────────────────────────────────────────────────────────────────────
 procedure CreatePopmycDatabase();
@@ -1339,13 +1358,21 @@ begin
     BackendDir, SW_HIDE, ewWaitUntilTerminated, ResultCode
   );
 
-  DeleteFile(PgSuperPwdFile);   // always delete, regardless of outcome
-
-  if ResultCode = 0 then
-    Log('POPMYC database created/verified successfully.')
-  else
+  if ResultCode = 0 then begin
+    Log('POPMYC database created/verified successfully.');
+    // Check if .env was updated to popmyc_app credentials
+    if EnvHasRealCredentials(DataDir) then begin
+      Log('.env verified with popmyc_app — deleting password file.');
+      DeleteFile(PgSuperPwdFile);
+    end else begin
+      Log('WARNING: .env still has placeholder — keeping as .pg_super_pwd for Electron retry.');
+      RenameFile(PgSuperPwdFile, DataDir + '\.pg_super_pwd');
+    end;
+  end else begin
     Log('WARNING: pg_setup.py create returned ' + IntToStr(ResultCode) +
-        ' — Electron UI will complete provisioning on first launch.');
+        ' — keeping .pg_super_pwd for Electron auto-provision on first launch.');
+    RenameFile(PgSuperPwdFile, DataDir + '\.pg_super_pwd');
+  end;
 end;
 
 // ─────────────────────────────────────────────────────────────────────────────
